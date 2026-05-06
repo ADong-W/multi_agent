@@ -1,0 +1,46 @@
+room:
+  name: implementation-design-room
+
+policy:
+  mode: supervisor
+  require_review: true
+  max_parallel: 2
+
+members:
+  - agent_id: agent_1
+    display_name: Supervisor
+    roles:
+      - supervisor
+      - leader
+      - planner
+    capabilities:
+      - supervisor
+      - analysis
+      - planning
+      - review
+      - summary
+
+  - agent_id: agent_2
+    display_name: Dimension Model
+    roles:
+      - specialist
+    capabilities:
+      - dimension
+      - model
+      - data
+
+  - agent_id: agent_3
+    display_name: Form
+    roles:
+      - specialist
+    capabilities:
+      - form
+      - ui
+
+  - agent_id: agent_4
+    display_name: Permission
+    roles:
+      - specialist
+    capabilities:
+      - permission
+      - access

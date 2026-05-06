@@ -1,0 +1,6 @@
+data/teamroom.json
+data/teamroom.json.tmp
+data/openclaw-device.json
+node_modules/
+backups/
+.DS_Store

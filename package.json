@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-teamroom",
+  "version": "0.1.0",
+  "description": "Lightweight multi-agent collaboration room and policy router for OpenClaw-style agents.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/orchestrator.js && node --check src/policy.js && node --check src/store.js && node --check src/adapters/mock.js && node --check src/adapters/openclaw-gateway.js && node --check src/plugin/openclaw-teamroom-plugin.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>实施设计 Agent 协作驾驶舱</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <h1>实施设计 Agent 协作驾驶舱</h1>
+          <p id="connectionStatus">Disconnected</p>
+        </div>
+        <div class="topbar-actions">
+          <input id="tokenInput" type="password" autocomplete="off" placeholder="访问 Token" />
+          <button id="saveTokenButton" class="icon-button" title="保存 Token">✓</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <aside class="panel sidebar">
+          <section class="section">
+            <div class="section-header">
+              <h2>协作室</h2>
+            </div>
+            <form id="roomForm" class="stack">
+              <input id="roomNameInput" name="name" placeholder="协作室名称" />
+              <div class="split">
+                <select id="policyModeInput" name="mode">
+                  <option value="supervisor">Supervisor 驱动</option>
+                  <option value="capability">能力匹配</option>
+                  <option value="leader">Leader 接力</option>
+                  <option value="round_robin">轮转</option>
+                  <option value="manual">手动</option>
+                </select>
+                <button type="submit">新建</button>
+              </div>
+            </form>
+            <div id="roomsList" class="list"></div>
+          </section>
+
+          <section class="section">
+            <div class="section-header">
+              <h2>Agents</h2>
+              <button id="refreshAgentsButton" class="icon-button" title="刷新 agents">↻</button>
+            </div>
+            <div id="agentsList" class="list"></div>
+          </section>
+        </aside>
+
+        <section class="panel conversation">
+          <div class="conversation-header">
+            <div>
+              <h2 id="activeRoomName">未选择协作室</h2>
+              <p id="activeRoomPolicy">协作策略</p>
+            </div>
+            <div id="memberChips" class="chips"></div>
+          </div>
+
+          <div id="eventsFeed" class="events-feed"></div>
+
+          <form id="taskForm" class="task-form">
+            <textarea id="taskGoalInput" rows="3" placeholder="把实施设计需求发送给这个协作室"></textarea>
+            <button type="submit">运行</button>
+          </form>
+        </section>
+
+        <aside class="panel inspector">
+          <section class="section">
+            <div class="section-header">
+              <h2>任务流</h2>
+            </div>
+            <div id="tasksList" class="task-list"></div>
+          </section>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
