@@ -1,4 +1,5 @@
 import { createId } from "./utils.js";
+import { normalizePromptTemplates } from "./prompt-templates.js";
 
 const ROLE_NEEDS = {
   supervisor_dispatch: ["supervisor", "leader", "planning", "analysis"],
@@ -32,8 +33,27 @@ export function normalizePolicy(policy = {}) {
   return {
     mode: policy.mode || "supervisor",
     requireReview: policy.requireReview ?? policy.require_review ?? true,
-    maxParallel: Math.max(1, Number(policy.maxParallel ?? policy.max_parallel ?? 2))
+    maxParallel: Math.max(1, Number(policy.maxParallel ?? policy.max_parallel ?? 2)),
+    fallbackDispatch: normalizeFallbackDispatch(policy.fallbackDispatch ?? policy.fallback_dispatch),
+    roomContextLimit: clampInt(policy.roomContextLimit ?? policy.room_context_limit, 6, 0, 20),
+    taskMessageLimit: clampInt(policy.taskMessageLimit ?? policy.task_message_limit, 12, 0, 50),
+    supervisorExtraPrompt: String(policy.supervisorExtraPrompt ?? policy.supervisor_extra_prompt ?? "").trim(),
+    specialistExtraPrompt: String(policy.specialistExtraPrompt ?? policy.specialist_extra_prompt ?? "").trim(),
+    reviewExtraPrompt: String(policy.reviewExtraPrompt ?? policy.review_extra_prompt ?? "").trim(),
+    promptTemplates: normalizePromptTemplates(policy.promptTemplates ?? policy.prompt_templates)
   };
+}
+
+function normalizeFallbackDispatch(value) {
+  return ["none", "keyword", "all"].includes(value) ? value : "none";
+}
+
+function clampInt(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, number));
 }
 
 export function inferCapabilities(goal) {

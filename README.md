@@ -25,6 +25,8 @@ The default policy is `supervisor`: the task first goes to the Supervisor, the S
 
 Tasks in the same room share context. TeamRoom injects summaries from completed room tasks into later prompts. In OpenClaw Gateway mode, the same room and agent also reuse the same OpenClaw chat session.
 
+A room can have only one current task at a time. While a task is queued, running, failed, or interrupted, new task creation is blocked. The user can terminate the current task, or send a chat message such as "continue" to resume from the first unfinished stage.
+
 ## Quick Start
 
 Requirements:
@@ -75,6 +77,15 @@ The Agents list supports local tags for existing OpenClaw agents. TeamRoom does 
 
 Profiles are used for UI display, room member metadata, Supervisor dispatch prompts, and generic capability routing modes.
 
+## Configuration Workbench
+
+The top-level `配置` button opens a dedicated configuration workbench:
+
+- OpenClaw agent files: view and edit `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `MEMORY.md` for each agent workspace.
+- TeamRoom collaboration templates: configure Supervisor dispatch, Specialist work, Supervisor review, previous-output handoff, room-history formatting, and human-message formatting per room.
+
+By default, agent workspaces are discovered under `~/.openclaw`, such as `workspace-agent_1`. Set `OPENCLAW_WORKSPACE_ROOT` to point elsewhere. Before writing an agent file, TeamRoom backs up the previous file under `data/openclaw-file-backups/`.
+
 ## Runtime Modes
 
 Mock mode:
@@ -123,6 +134,8 @@ TEAMROOM_ADAPTER=mock | openclaw-gateway | openclaw-http | openclaw-responses
 OPENCLAW_BASE_URL=http://127.0.0.1:3000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_DEVICE_FILE=./data/openclaw-device.json
+OPENCLAW_WORKSPACE_ROOT=~/.openclaw
+OPENCLAW_AGENT_FILE_BACKUP_DIR=./data/openclaw-file-backups
 OPENCLAW_AGENTS_PATH=/api/agents
 OPENCLAW_RUN_PATH=/api/agents/:agentId/runs
 OPENCLAW_MODELS_PATH=/v1/models
@@ -150,8 +163,13 @@ GET    /api/rooms/:roomId
 DELETE /api/rooms/:roomId
 POST   /api/rooms/:roomId/members
 DELETE /api/rooms/:roomId/members/:agentId
+POST   /api/rooms/:roomId/messages
 POST   /api/rooms/:roomId/tasks
+POST   /api/rooms/:roomId/tasks/:taskId/cancel
 GET    /api/rooms/:roomId/events
+GET    /api/config/prompt-templates
+GET    /api/openclaw/agents/:agentId/files
+PUT    /api/openclaw/agents/:agentId/files/:fileName
 ```
 
 Example task:

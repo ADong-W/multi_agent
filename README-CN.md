@@ -25,6 +25,8 @@ TeamRoom 默认将一次实施设计协作建模为：
 
 同一个协作室内的任务共享上下文：TeamRoom 会把该协作室内已完成的历史任务摘要注入后续任务；在 OpenClaw Gateway 模式下，同一协作室同一 agent 也会复用同一个 OpenClaw chat session。
 
+同一协作室同一时间只能有一个当前任务。当前任务未完成、失败或中断时，不能直接发布新任务；可以在任务控制区终止任务，或者在聊天区输入“继续任务”来从未完成阶段续跑。
+
 ## 快速开始
 
 环境要求：
@@ -82,6 +84,15 @@ TeamRoom core
 
 常用预设包括：总控、维度/模型、表单、权限、规则、集成、作业流。
 
+## 配置工作台
+
+顶部“配置”按钮会打开独立配置工作台，包含两类配置：
+
+- OpenClaw Agent 文件：查看和修改每个 agent 工作区里的 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`、`MEMORY.md`。
+- TeamRoom 协作模板：按协作室修改 Supervisor 派工、Specialist 执行、Supervisor 复核、前序 agent 输出拼接、历史任务拼接和人工补充消息拼接模板。
+
+默认会从 `~/.openclaw` 下寻找 agent 工作区，例如 `workspace-agent_1`。可以用 `OPENCLAW_WORKSPACE_ROOT` 指向其他 OpenClaw 工作区根目录。修改 agent 文件时，TeamRoom 会把原文件备份到 `data/openclaw-file-backups/`。
+
 ## 运行模式
 
 Mock 模式：
@@ -130,6 +141,8 @@ TEAMROOM_ADAPTER=mock | openclaw-gateway | openclaw-http | openclaw-responses
 OPENCLAW_BASE_URL=http://127.0.0.1:3000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_DEVICE_FILE=./data/openclaw-device.json
+OPENCLAW_WORKSPACE_ROOT=~/.openclaw
+OPENCLAW_AGENT_FILE_BACKUP_DIR=./data/openclaw-file-backups
 OPENCLAW_AGENTS_PATH=/api/agents
 OPENCLAW_RUN_PATH=/api/agents/:agentId/runs
 OPENCLAW_MODELS_PATH=/v1/models
@@ -157,8 +170,13 @@ GET    /api/rooms/:roomId
 DELETE /api/rooms/:roomId
 POST   /api/rooms/:roomId/members
 DELETE /api/rooms/:roomId/members/:agentId
+POST   /api/rooms/:roomId/messages
 POST   /api/rooms/:roomId/tasks
+POST   /api/rooms/:roomId/tasks/:taskId/cancel
 GET    /api/rooms/:roomId/events
+GET    /api/config/prompt-templates
+GET    /api/openclaw/agents/:agentId/files
+PUT    /api/openclaw/agents/:agentId/files/:fileName
 ```
 
 任务示例：

@@ -6,9 +6,39 @@ const state = {
   activeRoom: null,
   tasks: [],
   events: [],
+  expandedAgents: new Set(),
+  expandedMessages: new Set(),
+  expandedTasks: new Set(),
+  configOpen: false,
+  configTab: "agent-files",
+  configAgentId: localStorage.getItem("teamroom.configAgentId") || "",
+  configFileName: localStorage.getItem("teamroom.configFileName") || "AGENTS.md",
+  configRoomId: localStorage.getItem("teamroom.configRoomId") || "",
+  agentFiles: new Map(),
+  promptDefaults: null,
+  promptPlaceholders: [],
   source: null,
   sourceRoomId: ""
 };
+
+const OPENCLAW_AGENT_FILES = [
+  "AGENTS.md",
+  "SOUL.md",
+  "TOOLS.md",
+  "IDENTITY.md",
+  "USER.md",
+  "HEARTBEAT.md",
+  "MEMORY.md"
+];
+
+const PROMPT_TEMPLATE_KEYS = [
+  "supervisorDispatch",
+  "specialistWork",
+  "supervisorReview",
+  "previousOutputItem",
+  "roomContextItem",
+  "taskMessageItem"
+];
 
 const PROFILE_PRESETS = [
   {
@@ -57,6 +87,33 @@ const PROFILE_PRESETS = [
 
 const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
+  shell: document.querySelector(".shell"),
+  openConfigButton: document.querySelector("#openConfigButton"),
+  closeConfigButton: document.querySelector("#closeConfigButton"),
+  configView: document.querySelector("#configView"),
+  configStatus: document.querySelector("#configStatus"),
+  configTabs: [...document.querySelectorAll("[data-config-tab]")],
+  agentFilesPanel: document.querySelector("#agentFilesPanel"),
+  teamroomPolicyPanel: document.querySelector("#teamroomPolicyPanel"),
+  configAgentSelect: document.querySelector("#configAgentSelect"),
+  agentFileWorkspace: document.querySelector("#agentFileWorkspace"),
+  agentFileTabs: document.querySelector("#agentFileTabs"),
+  agentFileEditor: document.querySelector("#agentFileEditor"),
+  saveAgentFileButton: document.querySelector("#saveAgentFileButton"),
+  configRoomSelect: document.querySelector("#configRoomSelect"),
+  configFallbackDispatchInput: document.querySelector("#configFallbackDispatchInput"),
+  configRequireReviewInput: document.querySelector("#configRequireReviewInput"),
+  configRoomContextLimitInput: document.querySelector("#configRoomContextLimitInput"),
+  configTaskMessageLimitInput: document.querySelector("#configTaskMessageLimitInput"),
+  promptPlaceholders: document.querySelector("#promptPlaceholders"),
+  supervisorDispatchTemplateInput: document.querySelector("#supervisorDispatchTemplateInput"),
+  specialistWorkTemplateInput: document.querySelector("#specialistWorkTemplateInput"),
+  supervisorReviewTemplateInput: document.querySelector("#supervisorReviewTemplateInput"),
+  previousOutputItemTemplateInput: document.querySelector("#previousOutputItemTemplateInput"),
+  roomContextItemTemplateInput: document.querySelector("#roomContextItemTemplateInput"),
+  taskMessageItemTemplateInput: document.querySelector("#taskMessageItemTemplateInput"),
+  resetPolicyTemplatesButton: document.querySelector("#resetPolicyTemplatesButton"),
+  savePolicyConfigButton: document.querySelector("#savePolicyConfigButton"),
   tokenInput: document.querySelector("#tokenInput"),
   saveTokenButton: document.querySelector("#saveTokenButton"),
   roomForm: document.querySelector("#roomForm"),
@@ -69,8 +126,12 @@ const els = {
   activeRoomPolicy: document.querySelector("#activeRoomPolicy"),
   memberChips: document.querySelector("#memberChips"),
   eventsFeed: document.querySelector("#eventsFeed"),
+  chatForm: document.querySelector("#chatForm"),
+  chatMessageInput: document.querySelector("#chatMessageInput"),
   taskForm: document.querySelector("#taskForm"),
   taskGoalInput: document.querySelector("#taskGoalInput"),
+  cancelTaskButton: document.querySelector("#cancelTaskButton"),
+  activeTaskStatus: document.querySelector("#activeTaskStatus"),
   tasksList: document.querySelector("#tasksList")
 };
 
@@ -82,8 +143,55 @@ els.saveTokenButton.addEventListener("click", () => {
   refreshAll();
 });
 
+window.addEventListener("resize", () => {
+  window.requestAnimationFrame(drawMemberGraphLines);
+});
+
 els.refreshAgentsButton.addEventListener("click", () => {
   loadAgents();
+});
+
+els.openConfigButton.addEventListener("click", async () => {
+  await openConfigView();
+});
+
+els.closeConfigButton.addEventListener("click", () => {
+  closeConfigView();
+});
+
+els.configTabs.forEach((button) => {
+  button.addEventListener("click", async () => {
+    state.configTab = button.dataset.configTab;
+    renderConfigView();
+    if (state.configTab === "agent-files") {
+      await loadSelectedAgentFiles();
+    }
+  });
+});
+
+els.configAgentSelect.addEventListener("change", async () => {
+  state.configAgentId = els.configAgentSelect.value;
+  localStorage.setItem("teamroom.configAgentId", state.configAgentId);
+  await loadSelectedAgentFiles({ force: true });
+});
+
+els.configRoomSelect.addEventListener("change", () => {
+  state.configRoomId = els.configRoomSelect.value;
+  localStorage.setItem("teamroom.configRoomId", state.configRoomId);
+  renderTeamRoomConfigForm();
+});
+
+els.saveAgentFileButton.addEventListener("click", async () => {
+  await saveSelectedAgentFile();
+});
+
+els.savePolicyConfigButton.addEventListener("click", async () => {
+  await saveTeamRoomPolicyConfig();
+});
+
+els.resetPolicyTemplatesButton.addEventListener("click", () => {
+  fillPromptTemplateInputs(state.promptDefaults || {});
+  setConfigStatus("已填入默认模板，点击保存后生效");
 });
 
 els.roomForm.addEventListener("submit", async (event) => {
@@ -118,11 +226,54 @@ els.taskForm.addEventListener("submit", async (event) => {
     return;
   }
   els.taskGoalInput.value = "";
-  await api(`/api/rooms/${state.activeRoomId}/tasks`, {
+  try {
+    await api(`/api/rooms/${state.activeRoomId}/tasks`, {
+      method: "POST",
+      body: { goal }
+    });
+    setTimeout(loadActiveRoom, 300);
+  } catch (error) {
+    setConnection(error.message);
+    els.taskGoalInput.value = goal;
+  }
+});
+
+els.chatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.activeRoomId) {
+    return;
+  }
+  const content = els.chatMessageInput.value.trim();
+  if (!content) {
+    return;
+  }
+  els.chatMessageInput.value = "";
+  try {
+    const result = await api(`/api/rooms/${state.activeRoomId}/messages`, {
+      method: "POST",
+      body: { content }
+    });
+    appendLocalEvent(result.event || createLocalMessageEvent(content));
+    setTimeout(loadActiveRoom, 300);
+  } catch (error) {
+    setConnection(error.message);
+    els.chatMessageInput.value = content;
+  }
+});
+
+els.cancelTaskButton.addEventListener("click", async () => {
+  const task = activeTask();
+  if (!state.activeRoomId || !task) {
+    return;
+  }
+  if (!window.confirm(`终止当前任务“${task.goal}”？终止后才能发布新任务。`)) {
+    return;
+  }
+  await api(`/api/rooms/${state.activeRoomId}/tasks/${encodeURIComponent(task.id)}/cancel`, {
     method: "POST",
-    body: { goal }
+    body: { reason: "Human terminated the task." }
   });
-  setTimeout(loadActiveRoom, 300);
+  await loadActiveRoom();
 });
 
 async function refreshAll() {
@@ -130,8 +281,116 @@ async function refreshAll() {
   if (!state.activeRoomId && state.rooms[0]) {
     state.activeRoomId = state.rooms[0].id;
   }
+  if (!state.configRoomId && state.activeRoomId) {
+    state.configRoomId = state.activeRoomId;
+  }
+  if (!state.configAgentId && state.agents[0]) {
+    state.configAgentId = state.agents[0].id;
+  }
   await loadActiveRoom();
   render();
+}
+
+async function openConfigView() {
+  state.configOpen = true;
+  state.configRoomId = state.configRoomId || state.activeRoomId || state.rooms[0]?.id || "";
+  state.configAgentId = state.configAgentId || state.agents[0]?.id || "";
+  els.shell.classList.add("config-open");
+  els.configView.classList.remove("hidden");
+  try {
+    await loadPromptDefaults();
+  } catch (error) {
+    setConfigStatus(error.message);
+  }
+  renderConfigView();
+  if (state.configTab === "agent-files") {
+    await loadSelectedAgentFiles();
+  }
+}
+
+function closeConfigView() {
+  state.configOpen = false;
+  els.shell.classList.remove("config-open");
+  els.configView.classList.add("hidden");
+}
+
+async function loadPromptDefaults() {
+  if (state.promptDefaults) {
+    return;
+  }
+  const payload = await api("/api/config/prompt-templates");
+  state.promptDefaults = payload.promptTemplates || {};
+  state.promptPlaceholders = payload.placeholders || [];
+}
+
+async function loadSelectedAgentFiles({ force = false } = {}) {
+  if (!state.configAgentId) {
+    renderAgentFileConfig();
+    return;
+  }
+  if (!force && state.agentFiles.has(state.configAgentId)) {
+    renderAgentFileConfig();
+    return;
+  }
+  setConfigStatus("正在加载 agent 文件...");
+  try {
+    const payload = await api(`/api/openclaw/agents/${encodeURIComponent(state.configAgentId)}/files`);
+    state.agentFiles.set(state.configAgentId, payload);
+    setConfigStatus("Agent 文件已加载");
+  } catch (error) {
+    setConfigStatus(error.message);
+  }
+  renderAgentFileConfig();
+}
+
+async function saveSelectedAgentFile() {
+  if (!state.configAgentId || !state.configFileName) {
+    return;
+  }
+  setConfigStatus("正在保存 agent 文件...");
+  try {
+    const result = await api(`/api/openclaw/agents/${encodeURIComponent(state.configAgentId)}/files/${encodeURIComponent(state.configFileName)}`, {
+      method: "PUT",
+      body: { content: els.agentFileEditor.value }
+    });
+    const cached = state.agentFiles.get(state.configAgentId) || { files: [] };
+    const nextFiles = OPENCLAW_AGENT_FILES.map((name) => {
+      if (name === result.file.name) {
+        return result.file;
+      }
+      return cached.files?.find((file) => file.name === name) || { name, exists: false, content: "" };
+    });
+    state.agentFiles.set(state.configAgentId, { ...cached, ...result, files: nextFiles });
+    setConfigStatus(`${state.configFileName} 已保存`);
+    renderAgentFileConfig();
+  } catch (error) {
+    setConfigStatus(error.message);
+  }
+}
+
+async function saveTeamRoomPolicyConfig() {
+  const room = selectedConfigRoom();
+  if (!room) {
+    return;
+  }
+  const policy = readTeamRoomConfigForm(room.policy || {});
+  setConfigStatus("正在保存协作配置...");
+  try {
+    const result = await api(`/api/rooms/${encodeURIComponent(room.id)}/policy`, {
+      method: "PUT",
+      body: { policy }
+    });
+    state.rooms = state.rooms.map((item) => item.id === result.room.id ? result.room : item);
+    if (state.activeRoomId === result.room.id) {
+      state.activeRoom = result.room;
+    }
+    setConfigStatus("协作配置已保存");
+    renderRooms();
+    renderActiveRoom();
+    renderTeamRoomConfigForm();
+  } catch (error) {
+    setConfigStatus(error.message);
+  }
 }
 
 async function loadAgents() {
@@ -196,13 +455,18 @@ function connectEvents() {
   source.onerror = () => setConnection("Reconnecting");
   const eventNames = [
     "room.created",
+    "room.policy_updated",
     "member.added",
     "member.removed",
+    "message.created",
     "task.created",
     "task.planned",
     "task.running",
     "task.completed",
     "task.failed",
+    "task.cancelled",
+    "task.resumed",
+    "task.resume_skipped",
     "stage.assigned",
     "stage.running",
     "stage.completed",
@@ -211,14 +475,66 @@ function connectEvents() {
   for (const name of eventNames) {
     source.addEventListener(name, (message) => {
       const event = JSON.parse(message.data);
-      state.events.push(event);
-      state.events = state.events.slice(-150);
-      renderEvents();
-      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.")) {
+      appendLocalEvent(event);
+      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.") || name.startsWith("room.")) {
         loadActiveRoom();
       }
     });
   }
+}
+
+function appendLocalEvent(event) {
+  if (!event?.id || state.events.some((item) => item.id === event.id)) {
+    return;
+  }
+  if (isLocalEvent(event) && state.events.some((item) => isMatchingServerMessage(item, event))) {
+    return;
+  }
+  if (!isLocalEvent(event)) {
+    state.events = state.events.filter((item) => !isMatchingLocalMessage(item, event));
+  }
+  state.events.push(event);
+  state.events = state.events.slice(-150);
+  renderEvents();
+}
+
+function createLocalMessageEvent(content) {
+  const task = activeTask();
+  return {
+    id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    roomId: state.activeRoomId,
+    taskId: task?.id,
+    type: "message.created",
+    timestamp: new Date().toISOString(),
+    payload: {
+      taskId: task?.id,
+      author: "human",
+      content
+    }
+  };
+}
+
+function isLocalEvent(event) {
+  return String(event?.id || "").startsWith("local-");
+}
+
+function isMatchingServerMessage(event, localEvent) {
+  return !isLocalEvent(event) && isMatchingMessage(event, localEvent);
+}
+
+function isMatchingLocalMessage(event, serverEvent) {
+  return isLocalEvent(event) && isMatchingMessage(event, serverEvent);
+}
+
+function isMatchingMessage(left, right) {
+  if (left?.type !== "message.created" || right?.type !== "message.created") {
+    return false;
+  }
+  const sameTask = (left.payload?.taskId || "") === (right.payload?.taskId || "");
+  const sameContent = (left.payload?.content || "") === (right.payload?.content || "");
+  const leftTime = new Date(left.timestamp || 0).getTime();
+  const rightTime = new Date(right.timestamp || 0).getTime();
+  return sameTask && sameContent && Math.abs(leftTime - rightTime) < 15000;
 }
 
 function setConnection(text) {
@@ -231,6 +547,9 @@ function render() {
   renderActiveRoom();
   renderEvents();
   renderTasks();
+  if (state.configOpen) {
+    renderConfigView();
+  }
 }
 
 function renderRooms() {
@@ -289,13 +608,24 @@ function renderAgents() {
   }
   const memberIds = new Set((state.activeRoom?.members || []).map((member) => member.agentId));
   els.agentsList.innerHTML = state.agents.map((agent) => `
-    <div class="item">
-      <div class="item-title">
-        <span>${escapeHtml(agent.name || agent.id)}</span>
-        <button data-add-agent="${escapeHtml(agent.id)}" ${!state.activeRoomId || memberIds.has(agent.id) ? "disabled" : ""}>拉入</button>
+    <article class="agent-card ${state.expandedAgents.has(agent.id) ? "expanded" : ""}" data-agent-card="${escapeHtml(agent.id)}">
+      <div class="agent-summary" data-agent-toggle="${escapeHtml(agent.id)}" role="button" tabindex="0" aria-expanded="${state.expandedAgents.has(agent.id) ? "true" : "false"}">
+        <span class="summary-caret" aria-hidden="true">›</span>
+        <span class="agent-summary-main">
+          <span class="agent-name">${escapeHtml(agent.name || agent.id)}</span>
+        </span>
+        <span class="status-pill ${memberIds.has(agent.id) ? "completed" : ""}">${memberIds.has(agent.id) ? "已在室" : "可加入"}</span>
+        <button
+          type="button"
+          class="agent-add-button"
+          data-add-agent="${escapeHtml(agent.id)}"
+          ${!state.activeRoomId || memberIds.has(agent.id) ? "disabled" : ""}
+        >${memberIds.has(agent.id) ? "已加入" : "拉入"}</button>
       </div>
-      <div class="meta">${escapeHtml(agent.id)} · ${agent.profileSource === "local" ? "本地标签" : "OpenClaw 推断"}</div>
-      <div class="tags">${renderAgentTags(agent)}</div>
+      <div class="agent-body">
+        <div class="meta">${escapeHtml(agent.id)} · ${agent.profileSource === "local" ? "本地标签" : "OpenClaw 推断"}</div>
+        <div class="tags">${renderAgentTags(agent)}</div>
+      </div>
       <div class="profile-editor" data-profile-agent="${escapeHtml(agent.id)}">
         <div class="profile-inputs">
           <input data-profile-roles="${escapeHtml(agent.id)}" value="${escapeHtml((agent.roles || []).join(", "))}" placeholder="roles" />
@@ -309,22 +639,34 @@ function renderAgents() {
           <button type="button" class="secondary-button" data-clear-profile="${escapeHtml(agent.id)}">清空</button>
         </div>
       </div>
-    </div>
+    </article>
   `).join("");
 
+  bindAgentToggles();
+
   els.agentsList.querySelectorAll("[data-add-agent]").forEach((button) => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
       const agent = state.agents.find((item) => item.id === button.dataset.addAgent);
-      await api(`/api/rooms/${state.activeRoomId}/members`, {
-        method: "POST",
-        body: {
-          agentId: agent.id,
-          name: agent.name,
-          roles: agent.roles || [],
-          capabilities: agent.capabilities || []
-        }
-      });
-      await loadActiveRoom();
+      if (!agent || !state.activeRoomId || button.disabled) {
+        return;
+      }
+      button.disabled = true;
+      try {
+        await api(`/api/rooms/${state.activeRoomId}/members`, {
+          method: "POST",
+          body: {
+            agentId: agent.id,
+            name: agent.name,
+            roles: agent.roles || [],
+            capabilities: agent.capabilities || []
+          }
+        });
+        await loadActiveRoom();
+      } catch (error) {
+        setConnection(error.message);
+        button.disabled = false;
+      }
     });
   });
 
@@ -352,6 +694,33 @@ function renderAgents() {
   });
 }
 
+function bindAgentToggles() {
+  els.agentsList.querySelectorAll("[data-agent-toggle]").forEach((toggle) => {
+    const activate = () => {
+      const agentId = toggle.dataset.agentToggle;
+      if (!agentId) {
+        return;
+      }
+      if (state.expandedAgents.has(agentId)) {
+        state.expandedAgents.delete(agentId);
+      } else {
+        state.expandedAgents.add(agentId);
+      }
+      renderAgents();
+    };
+    toggle.addEventListener("click", activate);
+    toggle.addEventListener("keydown", (event) => {
+      if (event.target.closest("button, input, textarea, select")) {
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
+    });
+  });
+}
+
 function renderActiveRoom() {
   const room = state.activeRoom;
   if (!room) {
@@ -359,6 +728,9 @@ function renderActiveRoom() {
     els.activeRoomPolicy.textContent = "协作策略";
     els.memberChips.innerHTML = "";
     els.taskForm.querySelector("button").disabled = true;
+    els.chatForm.querySelector("button").disabled = true;
+    els.cancelTaskButton.disabled = true;
+    els.activeTaskStatus.textContent = "暂无当前任务";
     return;
   }
 
@@ -367,10 +739,15 @@ function renderActiveRoom() {
   els.activeRoomPolicy.textContent = mode === "supervisor"
     ? `${policyLabel(mode)} · Supervisor 拆题 · ${room.policy?.requireReview ? "最终审核开启" : "最终审核关闭"}`
     : `${policyLabel(mode)} · ${room.policy?.requireReview ? "审核开启" : "审核关闭"} · max ${room.policy?.maxParallel || 1}`;
-  els.memberChips.innerHTML = (room.members || []).map((member) => `
-    <span class="chip ${escapeHtml(member.status || "idle")}">${escapeHtml(member.name || member.agentId)}</span>
-  `).join("");
-  els.taskForm.querySelector("button").disabled = !room.members?.length;
+  els.memberChips.innerHTML = renderMemberGraph(room);
+  window.requestAnimationFrame(drawMemberGraphLines);
+  const current = activeTask();
+  els.taskForm.querySelector("button").disabled = !room.members?.length || Boolean(current);
+  els.chatForm.querySelector("button").disabled = false;
+  els.cancelTaskButton.disabled = !current;
+  els.activeTaskStatus.innerHTML = current
+    ? `<strong>${escapeHtml(statusLabel(current.status))}</strong><span>${escapeHtml(current.goal)}</span>`
+    : "暂无当前任务";
 }
 
 function renderEvents() {
@@ -383,6 +760,7 @@ function renderEvents() {
     .filter(Boolean)
     .map(renderMessage)
     .join("");
+  bindMessageToggles();
   els.eventsFeed.scrollTop = els.eventsFeed.scrollHeight;
 }
 
@@ -391,27 +769,170 @@ function renderTasks() {
     els.tasksList.innerHTML = `<div class="empty">暂无任务</div>`;
     return;
   }
-  els.tasksList.innerHTML = state.tasks.map((task) => `
-    <article class="task-card">
-      <div class="stage-row">
-        <h3>${escapeHtml(task.goal)}</h3>
-        <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(task.status)}</span>
-      </div>
-      <div class="stage-list">
-        ${(task.stages || []).map((stage) => `
-          <div class="stage">
-            <div class="stage-row">
-              <span class="stage-name">${escapeHtml(stage.title)}</span>
-              <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(stage.status)}</span>
+  const current = activeTask();
+  els.tasksList.innerHTML = state.tasks.map((task) => {
+    const open = state.expandedTasks.has(task.id) || task.id === current?.id;
+    return `
+    <details class="task-card" data-task-card="${escapeHtml(task.id)}" ${open ? "open" : ""}>
+      <summary class="task-summary">
+        <span class="summary-caret">›</span>
+        <span class="task-summary-main">
+          <span class="task-title">${escapeHtml(task.goal)}</span>
+          <span class="meta">${escapeHtml(task.createdAt ? formatDateTime(task.createdAt) : "")}</span>
+        </span>
+        <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(statusLabel(task.status))}</span>
+      </summary>
+      <div class="task-stage-scroll">
+        <div class="stage-list">
+          ${(task.stages || []).map((stage) => `
+            <div class="stage">
+              <div class="stage-row">
+                <span class="stage-name">${escapeHtml(stage.title)}</span>
+                <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(statusLabel(stage.status))}</span>
+              </div>
+              <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
+              ${stage.reason ? `<div class="stage-note">${escapeHtml(stage.reason)}</div>` : ""}
+              ${stage.result?.summary ? `<div class="stage-result">${escapeHtml(truncate(stage.result.summary, 220))}</div>` : ""}
             </div>
-            <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
-            ${stage.reason ? `<div class="stage-note">${escapeHtml(stage.reason)}</div>` : ""}
-            ${stage.result?.summary ? `<div class="stage-result">${escapeHtml(truncate(stage.result.summary, 220))}</div>` : ""}
-          </div>
-        `).join("")}
+          `).join("")}
+        </div>
       </div>
-    </article>
-  `).join("");
+    </details>
+  `;
+  }).join("");
+  bindTaskToggles();
+}
+
+function renderConfigView() {
+  els.configTabs.forEach((button) => {
+    button.classList.toggle("active", button.dataset.configTab === state.configTab);
+  });
+  els.agentFilesPanel.classList.toggle("hidden", state.configTab !== "agent-files");
+  els.teamroomPolicyPanel.classList.toggle("hidden", state.configTab !== "teamroom-policy");
+  renderAgentFileConfig();
+  renderTeamRoomConfigForm();
+}
+
+function renderAgentFileConfig() {
+  els.configAgentSelect.innerHTML = state.agents.length
+    ? state.agents.map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name || agent.id)} (${escapeHtml(agent.id)})</option>`).join("")
+    : `<option value="">暂无 agent</option>`;
+  if (state.configAgentId && state.agents.some((agent) => agent.id === state.configAgentId)) {
+    els.configAgentSelect.value = state.configAgentId;
+  } else {
+    state.configAgentId = state.agents[0]?.id || "";
+    els.configAgentSelect.value = state.configAgentId;
+  }
+
+  if (!OPENCLAW_AGENT_FILES.includes(state.configFileName)) {
+    state.configFileName = OPENCLAW_AGENT_FILES[0];
+  }
+
+  els.agentFileTabs.innerHTML = OPENCLAW_AGENT_FILES.map((name) => {
+    const file = selectedAgentFile(name);
+    return `<button type="button" class="file-tab ${name === state.configFileName ? "active" : ""}" data-agent-file="${escapeHtml(name)}">${escapeHtml(name.replace(".md", ""))}${file?.exists ? "" : " *"}</button>`;
+  }).join("");
+
+  els.agentFileTabs.querySelectorAll("[data-agent-file]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.configFileName = button.dataset.agentFile;
+      localStorage.setItem("teamroom.configFileName", state.configFileName);
+      renderAgentFileConfig();
+    });
+  });
+
+  const payload = state.agentFiles.get(state.configAgentId);
+  const currentFile = selectedAgentFile(state.configFileName);
+  els.agentFileWorkspace.textContent = payload?.workspace ? `工作区: ${payload.workspace}` : "未加载工作区";
+  els.agentFileEditor.value = currentFile?.content || "";
+  els.agentFileEditor.disabled = !state.configAgentId;
+  els.saveAgentFileButton.disabled = !state.configAgentId;
+}
+
+function renderTeamRoomConfigForm() {
+  els.configRoomSelect.innerHTML = state.rooms.length
+    ? state.rooms.map((room) => `<option value="${escapeHtml(room.id)}">${escapeHtml(room.name)}</option>`).join("")
+    : `<option value="">暂无协作室</option>`;
+  if (state.configRoomId && state.rooms.some((room) => room.id === state.configRoomId)) {
+    els.configRoomSelect.value = state.configRoomId;
+  } else {
+    state.configRoomId = state.activeRoomId || state.rooms[0]?.id || "";
+    els.configRoomSelect.value = state.configRoomId;
+  }
+
+  const room = selectedConfigRoom();
+  const policy = room?.policy || {};
+  const templates = { ...(state.promptDefaults || {}), ...(policy.promptTemplates || {}) };
+  els.configFallbackDispatchInput.value = policy.fallbackDispatch || "none";
+  els.configRequireReviewInput.checked = policy.requireReview ?? true;
+  els.configRoomContextLimitInput.value = Number(policy.roomContextLimit ?? 6);
+  els.configTaskMessageLimitInput.value = Number(policy.taskMessageLimit ?? 12);
+  fillPromptTemplateInputs(templates);
+  renderPromptPlaceholders();
+
+  const disabled = !room;
+  [
+    els.configFallbackDispatchInput,
+    els.configRequireReviewInput,
+    els.configRoomContextLimitInput,
+    els.configTaskMessageLimitInput,
+    els.supervisorDispatchTemplateInput,
+    els.specialistWorkTemplateInput,
+    els.supervisorReviewTemplateInput,
+    els.previousOutputItemTemplateInput,
+    els.roomContextItemTemplateInput,
+    els.taskMessageItemTemplateInput,
+    els.resetPolicyTemplatesButton,
+    els.savePolicyConfigButton
+  ].forEach((element) => {
+    element.disabled = disabled;
+  });
+}
+
+function fillPromptTemplateInputs(templates) {
+  els.supervisorDispatchTemplateInput.value = templates.supervisorDispatch || "";
+  els.specialistWorkTemplateInput.value = templates.specialistWork || "";
+  els.supervisorReviewTemplateInput.value = templates.supervisorReview || "";
+  els.previousOutputItemTemplateInput.value = templates.previousOutputItem || "";
+  els.roomContextItemTemplateInput.value = templates.roomContextItem || "";
+  els.taskMessageItemTemplateInput.value = templates.taskMessageItem || "";
+}
+
+function renderPromptPlaceholders() {
+  els.promptPlaceholders.innerHTML = state.promptPlaceholders.map((name) => (
+    `<code>{{${escapeHtml(name)}}}</code>`
+  )).join("");
+}
+
+function readTeamRoomConfigForm(existingPolicy = {}) {
+  return {
+    ...existingPolicy,
+    fallbackDispatch: els.configFallbackDispatchInput.value,
+    requireReview: els.configRequireReviewInput.checked,
+    roomContextLimit: Number(els.configRoomContextLimitInput.value || 0),
+    taskMessageLimit: Number(els.configTaskMessageLimitInput.value || 0),
+    promptTemplates: {
+      supervisorDispatch: els.supervisorDispatchTemplateInput.value,
+      specialistWork: els.specialistWorkTemplateInput.value,
+      supervisorReview: els.supervisorReviewTemplateInput.value,
+      previousOutputItem: els.previousOutputItemTemplateInput.value,
+      roomContextItem: els.roomContextItemTemplateInput.value,
+      taskMessageItem: els.taskMessageItemTemplateInput.value
+    }
+  };
+}
+
+function selectedAgentFile(fileName) {
+  const payload = state.agentFiles.get(state.configAgentId);
+  return payload?.files?.find((file) => file.name === fileName) || null;
+}
+
+function selectedConfigRoom() {
+  return state.rooms.find((room) => room.id === state.configRoomId) || null;
+}
+
+function setConfigStatus(text) {
+  els.configStatus.textContent = text;
 }
 
 async function api(path, options = {}) {
@@ -512,6 +1033,126 @@ function renderAgentTags(agent) {
   return [...roles, ...capabilities].join("") || `<span class="tag">untagged</span>`;
 }
 
+function renderAgentTagPreview(agent) {
+  const roles = (agent.roles || []).map((tag) => ({ tag, kind: "role" }));
+  const capabilities = (agent.capabilities || []).map((tag) => ({ tag, kind: "" }));
+  const tags = [...roles, ...capabilities];
+  if (!tags.length) {
+    return `<span class="tag">untagged</span>`;
+  }
+  const visible = tags.slice(0, 4).map((item) => `<span class="tag ${item.kind}">${escapeHtml(item.tag)}</span>`);
+  if (tags.length > visible.length) {
+    visible.push(`<span class="tag">+${tags.length - visible.length}</span>`);
+  }
+  return visible.join("");
+}
+
+function renderMemberGraph(room) {
+  const members = room.members || [];
+  if (!members.length) {
+    return `<div class="member-graph empty-graph">暂无 agent</div>`;
+  }
+
+  const supervisor = findSupervisorMember(members) || members[0];
+  const specialists = members.filter((member) => member.agentId !== supervisor.agentId);
+  const runningStage = runningStageForActiveTask();
+  const activeAgentId = runningStage?.assignedAgentId || "";
+  const dimOthers = Boolean(activeAgentId);
+
+  return `
+    <div class="member-graph" data-active-agent="${escapeHtml(activeAgentId)}" data-supervisor-agent="${escapeHtml(supervisor.agentId)}">
+      <svg class="member-graph-lines" aria-hidden="true"></svg>
+      <div class="member-row supervisor-row">
+        ${renderMemberGraphNode(supervisor, {
+          kind: "supervisor",
+          active: activeAgentId === supervisor.agentId,
+          dim: dimOthers && activeAgentId !== supervisor.agentId
+        })}
+      </div>
+      <div class="member-row specialist-row">
+        ${specialists.length
+          ? specialists.map((member) => renderMemberGraphNode(member, {
+            kind: "specialist",
+            active: activeAgentId === member.agentId,
+            dim: dimOthers && activeAgentId !== member.agentId
+          })).join("")
+          : `<span class="member-node placeholder-node">暂无子 agent</span>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderMemberGraphNode(member, { kind, active, dim }) {
+  const label = member.name || member.agentId;
+  return `
+    <span
+      class="member-node ${escapeHtml(kind)} ${active ? "active" : ""} ${dim ? "dim" : ""}"
+      data-member-node="${escapeHtml(member.agentId)}"
+      title="${escapeHtml(label)}"
+    >
+      ${escapeHtml(label)}
+    </span>
+  `;
+}
+
+function drawMemberGraphLines() {
+  const graph = els.memberChips.querySelector(".member-graph");
+  const svg = graph?.querySelector(".member-graph-lines");
+  const supervisorNode = graph?.querySelector(".member-node.supervisor");
+  if (!graph || !svg || !supervisorNode) {
+    return;
+  }
+
+  const specialistNodes = [...graph.querySelectorAll(".member-node.specialist")];
+  const graphRect = graph.getBoundingClientRect();
+  if (!graphRect.width || !graphRect.height) {
+    return;
+  }
+
+  svg.setAttribute("viewBox", `0 0 ${graphRect.width} ${graphRect.height}`);
+  svg.innerHTML = "";
+
+  const supervisorRect = supervisorNode.getBoundingClientRect();
+  const x1 = supervisorRect.left - graphRect.left + supervisorRect.width / 2;
+  const y1 = supervisorRect.bottom - graphRect.top - 1;
+  const activeAgentId = graph.dataset.activeAgent || "";
+  const supervisorAgentId = graph.dataset.supervisorAgent || "";
+
+  for (const node of specialistNodes) {
+    const rect = node.getBoundingClientRect();
+    const x2 = rect.left - graphRect.left + rect.width / 2;
+    const y2 = rect.top - graphRect.top + 1;
+    const agentId = node.dataset.memberNode;
+    const active = activeAgentId && activeAgentId !== supervisorAgentId && activeAgentId === agentId;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", x1);
+    line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2);
+    line.setAttribute("y2", y2);
+    line.setAttribute("class", `member-graph-line ${active ? "active" : ""}`);
+    svg.appendChild(line);
+  }
+}
+
+function findSupervisorMember(members) {
+  return members.find(isSupervisorMember) || null;
+}
+
+function isSupervisorMember(member) {
+  const raw = [
+    member.agentId,
+    member.name,
+    ...(member.roles || []),
+    ...(member.capabilities || [])
+  ].filter(Boolean).join(" ").toLowerCase();
+  return raw.includes("supervisor") || raw.includes("总控");
+}
+
+function runningStageForActiveTask() {
+  const task = activeTask();
+  return task?.stages?.find((stage) => stage.status === "running") || null;
+}
+
 function labelForEvent(event) {
   return ({
     "room.created": "协作室已创建",
@@ -562,8 +1203,20 @@ function bodyForEvent(event, payload) {
 
 function eventToMessage(event) {
   const payload = event.payload || {};
+  if (event.type === "message.created") {
+    return {
+      id: event.id,
+      kind: "user",
+      author: "你",
+      title: "补充 / 干预",
+      time: event.timestamp,
+      body: payload.content || ""
+    };
+  }
+
   if (event.type === "task.created") {
     return {
+      id: event.id,
       kind: "user",
       author: "你",
       title: "提交需求",
@@ -575,6 +1228,7 @@ function eventToMessage(event) {
   if (event.type === "stage.completed") {
     const agent = findAgentDisplay(payload.agentId);
     return {
+      id: event.id,
       kind: "agent",
       author: agent.name,
       agentId: payload.agentId,
@@ -635,6 +1289,32 @@ function eventToMessage(event) {
     };
   }
 
+  if (event.type === "task.cancelled") {
+    return {
+      kind: "system",
+      time: event.timestamp,
+      body: `任务已终止。${payload.reason || ""}`.trim()
+    };
+  }
+
+  if (event.type === "task.resumed") {
+    return {
+      kind: "system",
+      time: event.timestamp,
+      body: payload.instruction
+        ? `继续任务：${payload.instruction}`
+        : "继续任务"
+    };
+  }
+
+  if (event.type === "task.resume_skipped") {
+    return {
+      kind: "system",
+      time: event.timestamp,
+      body: payload.reason || "任务正在运行，无需续跑"
+    };
+  }
+
   if (event.type === "task.failed" || event.type === "stage.failed") {
     return {
       kind: "system error",
@@ -666,6 +1346,8 @@ function renderMessage(message) {
 
   const avatar = initials(message.author);
   const title = message.title ? `<div class="message-stage">${escapeHtml(message.title)}</div>` : "";
+  const collapsible = isLongMessage(message.body);
+  const expanded = message.id && state.expandedMessages.has(message.id);
   return `
     <article class="message-row ${escapeHtml(message.kind)}">
       <div class="avatar" title="${escapeHtml(message.author)}">${escapeHtml(avatar)}</div>
@@ -674,13 +1356,65 @@ function renderMessage(message) {
           <span>${escapeHtml(message.author)}</span>
           <time>${formatTime(message.time)}</time>
         </div>
-        <div class="message-bubble">
+        <div class="message-bubble ${collapsible ? "collapsible" : ""} ${collapsible && !expanded ? "collapsed" : ""}" ${collapsible ? `data-collapsible-message="${escapeHtml(message.id || "")}"` : ""}>
           ${title}
           <div class="message-markdown">${renderMarkdown(message.body)}</div>
+          ${collapsible ? `<button type="button" class="message-toggle" data-message-toggle="${escapeHtml(message.id || "")}">${expanded ? "收起" : "展开"}</button>` : ""}
         </div>
       </div>
     </article>
   `;
+}
+
+function bindMessageToggles() {
+  els.eventsFeed.querySelectorAll("[data-message-toggle]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const messageId = button.dataset.messageToggle;
+      const bubble = button.closest(".message-bubble");
+      toggleMessageBubble(bubble, messageId);
+    });
+  });
+
+  els.eventsFeed.querySelectorAll("[data-collapsible-message]").forEach((bubble) => {
+    bubble.addEventListener("click", (event) => {
+      if (event.target.closest("a, button, code, pre")) {
+        return;
+      }
+      toggleMessageBubble(bubble, bubble.dataset.collapsibleMessage);
+    });
+  });
+}
+
+function toggleMessageBubble(bubble, messageId) {
+  if (!messageId || !bubble) {
+    return;
+  }
+  const collapsed = bubble.classList.toggle("collapsed");
+  const button = bubble.querySelector("[data-message-toggle]");
+  if (collapsed) {
+    state.expandedMessages.delete(messageId);
+    if (button) {
+      button.textContent = "展开";
+    }
+  } else {
+    state.expandedMessages.add(messageId);
+    if (button) {
+      button.textContent = "收起";
+    }
+  }
+}
+
+function bindTaskToggles() {
+  els.tasksList.querySelectorAll("[data-task-card]").forEach((card) => {
+    card.addEventListener("toggle", () => {
+      if (card.open) {
+        state.expandedTasks.add(card.dataset.taskCard);
+      } else {
+        state.expandedTasks.delete(card.dataset.taskCard);
+      }
+    });
+  });
 }
 
 function findAgentDisplay(agentId) {
@@ -697,11 +1431,39 @@ function stageTitleFromEvent(event) {
   return stage?.title || "";
 }
 
+function activeTask() {
+  return state.tasks.find((task) => !["completed", "cancelled"].includes(task.status)) || null;
+}
+
+function statusLabel(status) {
+  return ({
+    queued: "等待中",
+    running: "运行中",
+    completed: "已完成",
+    failed: "已中断",
+    cancelled: "已终止"
+  })[status] || status;
+}
+
+function isLongMessage(value) {
+  const text = String(value || "");
+  return text.length > 520 || text.split("\n").length > 10;
+}
+
 function formatTime(value) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit"
+  }).format(new Date(value));
+}
+
+function formatDateTime(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
   }).format(new Date(value));
 }
 
@@ -751,7 +1513,8 @@ function renderMarkdown(markdown) {
     closeQuote();
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     const fence = line.match(/^```(\w+)?\s*$/);
     if (fence) {
       if (inCode) {
@@ -782,6 +1545,22 @@ function renderMarkdown(markdown) {
       closeBlocks();
       const level = Math.min(6, heading[1].length);
       html.push(`<h${level}>${renderMarkdownInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    if (isMarkdownTableStart(line, lines[i + 1])) {
+      closeBlocks();
+      const headers = parseMarkdownTableRow(line);
+      const separators = parseMarkdownTableRow(lines[i + 1]);
+      const alignments = separators.map(tableAlignment);
+      const rows = [];
+      i += 2;
+      while (i < lines.length && isMarkdownTableRow(lines[i])) {
+        rows.push(parseMarkdownTableRow(lines[i]));
+        i += 1;
+      }
+      i -= 1;
+      html.push(renderMarkdownTable(headers, rows, alignments));
       continue;
     }
 
@@ -827,6 +1606,59 @@ function renderMarkdown(markdown) {
   }
   closeBlocks();
   return html.join("");
+}
+
+function isMarkdownTableStart(line, separatorLine) {
+  const headers = parseMarkdownTableRow(line);
+  const separators = parseMarkdownTableRow(separatorLine);
+  return Boolean(
+    headers?.length >= 2
+    && separators?.length >= headers.length
+    && separators.slice(0, headers.length).every(isMarkdownTableSeparator)
+  );
+}
+
+function isMarkdownTableRow(line) {
+  const cells = parseMarkdownTableRow(line);
+  return Boolean(cells?.length >= 2);
+}
+
+function parseMarkdownTableRow(line = "") {
+  const trimmed = String(line || "").trim();
+  if (!trimmed.includes("|")) {
+    return null;
+  }
+  const withoutLeading = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  const withoutEdges = withoutLeading.endsWith("|") ? withoutLeading.slice(0, -1) : withoutLeading;
+  return withoutEdges.split(/(?<!\\)\|/).map((cell) => cell.replaceAll("\\|", "|").trim());
+}
+
+function isMarkdownTableSeparator(value) {
+  return /^:?-{3,}:?$/.test(String(value || "").trim());
+}
+
+function tableAlignment(separator) {
+  const value = String(separator || "").trim();
+  if (value.startsWith(":") && value.endsWith(":")) {
+    return "center";
+  }
+  if (value.endsWith(":")) {
+    return "end";
+  }
+  return "start";
+}
+
+function renderMarkdownTable(headers, rows, alignments) {
+  const headerHtml = headers.map((cell, index) => (
+    `<th style="text-align:${alignments[index] || "start"}">${renderMarkdownInline(cell)}</th>`
+  )).join("");
+  const bodyHtml = rows.map((row) => {
+    const cells = headers.map((_header, index) => row[index] || "");
+    return `<tr>${cells.map((cell, index) => (
+      `<td style="text-align:${alignments[index] || "start"}">${renderMarkdownInline(cell)}</td>`
+    )).join("")}</tr>`;
+  }).join("");
+  return `<div class="markdown-table-wrap"><table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`;
 }
 
 function renderMarkdownInline(value) {

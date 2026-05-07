@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createId, nowIso } from "./utils.js";
+import { normalizePromptTemplates } from "./prompt-templates.js";
 
 function defaultData() {
   return {
@@ -56,11 +57,7 @@ export class JsonStore {
     const room = {
       id: createId("room"),
       name: name || "Untitled Room",
-      policy: {
-        mode: policy.mode || "supervisor",
-        requireReview: policy.requireReview ?? policy.require_review ?? true,
-        maxParallel: Number(policy.maxParallel ?? policy.max_parallel ?? 2)
-      },
+      policy: normalizePolicyInput(policy),
       members: [],
       createdAt: timestamp,
       updatedAt: timestamp
@@ -75,6 +72,18 @@ export class JsonStore {
     this.data.rooms[room.id] = room;
     await this.save();
     return room;
+  }
+
+  async updateRoomPolicy(roomId, policy = {}) {
+    const room = await this.getRoom(roomId);
+    if (!room) {
+      return null;
+    }
+    room.policy = normalizePolicyInput({
+      ...(room.policy || {}),
+      ...policy
+    });
+    return this.updateRoom(room);
   }
 
   async deleteRoom(roomId) {
@@ -213,6 +222,12 @@ export class JsonStore {
     return task;
   }
 
+  async getActiveTask(roomId) {
+    return Object.values(this.data.tasks)
+      .filter((task) => task.roomId === roomId && !["completed", "cancelled"].includes(task.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
+  }
+
   async getTask(taskId) {
     return this.data.tasks[taskId] || null;
   }
@@ -254,6 +269,33 @@ function normalizeTags(value) {
     return [];
   }
   return unique(value.map((item) => String(item).trim()).filter(Boolean));
+}
+
+function normalizePolicyInput(policy = {}) {
+  return {
+    mode: policy.mode || "supervisor",
+    requireReview: policy.requireReview ?? policy.require_review ?? true,
+    maxParallel: Math.max(1, Number(policy.maxParallel ?? policy.max_parallel ?? 2)),
+    fallbackDispatch: normalizeFallbackDispatch(policy.fallbackDispatch ?? policy.fallback_dispatch),
+    roomContextLimit: clampInt(policy.roomContextLimit ?? policy.room_context_limit, 6, 0, 20),
+    taskMessageLimit: clampInt(policy.taskMessageLimit ?? policy.task_message_limit, 12, 0, 50),
+    supervisorExtraPrompt: String(policy.supervisorExtraPrompt ?? policy.supervisor_extra_prompt ?? "").trim(),
+    specialistExtraPrompt: String(policy.specialistExtraPrompt ?? policy.specialist_extra_prompt ?? "").trim(),
+    reviewExtraPrompt: String(policy.reviewExtraPrompt ?? policy.review_extra_prompt ?? "").trim(),
+    promptTemplates: normalizePromptTemplates(policy.promptTemplates ?? policy.prompt_templates)
+  };
+}
+
+function normalizeFallbackDispatch(value) {
+  return ["none", "keyword", "all"].includes(value) ? value : "none";
+}
+
+function clampInt(value, fallback, min, max) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, number));
 }
 
 function unique(values) {

@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/orchestrator.js && node --check src/policy.js && node --check src/store.js && node --check src/adapters/mock.js && node --check src/adapters/openclaw-gateway.js && node --check src/plugin/openclaw-teamroom-plugin.js && node --check public/app.js"
+    "check": "node --check src/config.js && node --check src/server.js && node --check src/orchestrator.js && node --check src/policy.js && node --check src/prompt-templates.js && node --check src/openclaw-agent-files.js && node --check src/store.js && node --check src/adapters/mock.js && node --check src/adapters/openclaw-gateway.js && node --check src/plugin/openclaw-teamroom-plugin.js && node --check public/app.js"
   },
   "engines": {
     "node": ">=22"

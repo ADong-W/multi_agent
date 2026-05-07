@@ -6,6 +6,8 @@ import { loadConfig } from "./config.js";
 import { createAdapter } from "./adapters/index.js";
 import { EventHub } from "./events.js";
 import { Orchestrator } from "./orchestrator.js";
+import { createOpenClawAgentFiles, OPENCLAW_AGENT_FILE_NAMES } from "./openclaw-agent-files.js";
+import { DEFAULT_PROMPT_TEMPLATES } from "./prompt-templates.js";
 import { JsonStore } from "./store.js";
 import { readJsonBody, sendError, sendJson } from "./utils.js";
 
@@ -23,6 +25,7 @@ export async function createTeamRoomServer(config = loadConfig()) {
   await store.load();
 
   const adapter = createAdapter(config);
+  const agentFiles = createOpenClawAgentFiles(config);
   const events = new EventHub({ store });
   const orchestrator = new Orchestrator({ store, events, adapter });
 
@@ -35,6 +38,7 @@ export async function createTeamRoomServer(config = loadConfig()) {
         store,
         events,
         adapter,
+        agentFiles,
         orchestrator
       });
     } catch (error) {
@@ -73,11 +77,38 @@ async function handleRequest(context) {
   await serveStatic(res, config.publicDir, url.pathname);
 }
 
-async function routeApi({ req, res, store, events, adapter, orchestrator }, url) {
+async function routeApi({ req, res, store, events, adapter, agentFiles, orchestrator }, url) {
   const parts = url.pathname.split("/").filter(Boolean);
 
   if (req.method === "GET" && url.pathname === "/api/agents") {
     sendJson(res, 200, { agents: await listProfiledAgents(adapter, store) });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/config/prompt-templates") {
+    sendJson(res, 200, {
+      promptTemplates: DEFAULT_PROMPT_TEMPLATES,
+      placeholders: [
+        "agentName",
+        "agentId",
+        "roomName",
+        "roomMembers",
+        "goal",
+        "roomContext",
+        "taskMessages",
+        "previousOutputs",
+        "stageTitle",
+        "stageGoal",
+        "stageNeeds",
+        "stageReason",
+        "resumeInstruction",
+        "dispatchJsonContract",
+        "supervisorExtraPrompt",
+        "specialistExtraPrompt",
+        "reviewExtraPrompt",
+        "fallbackWarning"
+      ]
+    });
     return;
   }
 
@@ -97,6 +128,27 @@ async function routeApi({ req, res, store, events, adapter, orchestrator }, url)
     if (req.method === "DELETE") {
       await store.deleteAgentProfile(agentId, known);
       sendJson(res, 200, { agent: mergeAgentProfile(known, null) });
+      return;
+    }
+    sendError(res, 405, "Method not allowed");
+    return;
+  }
+
+  if (parts[0] === "api" && parts[1] === "openclaw" && parts[2] === "agents" && parts[3] && parts[4] === "files") {
+    const agentId = decodeURIComponent(parts[3]);
+    if (req.method === "GET" && parts.length === 5) {
+      sendJson(res, 200, await agentFiles.listFiles(agentId));
+      return;
+    }
+    if (req.method === "PUT" && parts[5]) {
+      const fileName = decodeURIComponent(parts[5]);
+      if (!OPENCLAW_AGENT_FILE_NAMES.includes(fileName)) {
+        sendError(res, 400, `Unsupported OpenClaw agent file: ${fileName}`);
+        return;
+      }
+      const body = await readJsonBody(req);
+      const result = await agentFiles.writeFile(agentId, fileName, body.content ?? "");
+      sendJson(res, 200, result);
       return;
     }
     sendError(res, 405, "Method not allowed");
@@ -141,6 +193,18 @@ async function routeApi({ req, res, store, events, adapter, orchestrator }, url)
       return;
     }
 
+    if (req.method === "PUT" && parts[3] === "policy") {
+      const body = await readJsonBody(req);
+      const room = await store.updateRoomPolicy(roomId, body.policy || body);
+      if (!room) {
+        sendError(res, 404, "Room not found");
+        return;
+      }
+      await events.publish(roomId, "room.policy_updated", { roomId, policy: room.policy });
+      sendJson(res, 200, { room });
+      return;
+    }
+
     if (req.method === "GET" && parts[3] === "events") {
       const room = await store.getRoom(roomId);
       if (!room) {
@@ -148,6 +212,13 @@ async function routeApi({ req, res, store, events, adapter, orchestrator }, url)
         return;
       }
       await events.subscribe(roomId, res);
+      return;
+    }
+
+    if (req.method === "POST" && parts[3] === "messages") {
+      const body = await readJsonBody(req);
+      const result = await orchestrator.submitHumanMessage(roomId, body);
+      sendJson(res, 201, result);
       return;
     }
 
@@ -177,6 +248,13 @@ async function routeApi({ req, res, store, events, adapter, orchestrator }, url)
       }
       await events.publish(roomId, "member.removed", { roomId, agentId });
       sendJson(res, 200, { room });
+      return;
+    }
+
+    if (req.method === "POST" && parts[3] === "tasks" && parts[4] && parts[5] === "cancel") {
+      const body = await readJsonBody(req);
+      const task = await orchestrator.cancelTask(roomId, decodeURIComponent(parts[4]), body.reason);
+      sendJson(res, 200, { task });
       return;
     }
 

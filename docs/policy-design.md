@@ -83,7 +83,13 @@ Mechanism:
 5. return all outputs to Supervisor Review
 ```
 
-If the Supervisor does not return parseable JSON, TeamRoom falls back to asking non-Supervisor room members for impact checks. That fallback is only for demo resilience; the intended path is Supervisor-authored dispatch.
+If the Supervisor does not return parseable JSON, TeamRoom uses the room policy's `fallbackDispatch` setting:
+
+- `keyword`: ask only specialists whose tags match the task keywords
+- `none`: do not create fallback specialist stages
+- `all`: ask every non-Supervisor room member for impact checks
+
+The default is `none`, so TeamRoom does not decide on behalf of the Supervisor. Fallbacks are only for demo resilience; the intended path is Supervisor-authored dispatch.
 
 ### manual
 
@@ -188,6 +194,19 @@ policy:
   mode: supervisor
   require_review: true
   max_parallel: 2
+  fallback_dispatch: none
+  room_context_limit: 6
+  task_message_limit: 12
+  supervisor_extra_prompt: ""
+  specialist_extra_prompt: ""
+  review_extra_prompt: ""
+  prompt_templates:
+    supervisorDispatch: "Supervisor 派工 prompt 模板"
+    specialistWork: "Specialist 执行 prompt 模板"
+    supervisorReview: "Supervisor 复核 prompt 模板"
+    previousOutputItem: "前序 agent 输出拼接模板"
+    roomContextItem: "历史任务上下文拼接模板"
+    taskMessageItem: "人工补充消息拼接模板"
 
 members:
   - agent_id: agent_1

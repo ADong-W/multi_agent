@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>实施设计 Agent 协作驾驶舱</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=20260507-markdown-table-1" />
   </head>
   <body>
     <div class="shell">
@@ -14,6 +14,7 @@
           <p id="connectionStatus">Disconnected</p>
         </div>
         <div class="topbar-actions">
+          <button id="openConfigButton" class="secondary-button" type="button">配置</button>
           <input id="tokenInput" type="password" autocomplete="off" placeholder="访问 Token" />
           <button id="saveTokenButton" class="icon-button" title="保存 Token">✓</button>
         </div>
@@ -21,7 +22,7 @@
 
       <main class="layout">
         <aside class="panel sidebar">
-          <section class="section">
+          <section class="section rooms-section">
             <div class="section-header">
               <h2>协作室</h2>
             </div>
@@ -41,7 +42,7 @@
             <div id="roomsList" class="list"></div>
           </section>
 
-          <section class="section">
+          <section class="section agents-section">
             <div class="section-header">
               <h2>Agents</h2>
               <button id="refreshAgentsButton" class="icon-button" title="刷新 agents">↻</button>
@@ -61,14 +62,28 @@
 
           <div id="eventsFeed" class="events-feed"></div>
 
-          <form id="taskForm" class="task-form">
-            <textarea id="taskGoalInput" rows="3" placeholder="把实施设计需求发送给这个协作室"></textarea>
-            <button type="submit">运行</button>
+          <form id="chatForm" class="chat-form">
+            <textarea id="chatMessageInput" rows="2" placeholder="参与协作聊天，例如：补充说明... / 继续任务"></textarea>
+            <button type="submit">发送</button>
           </form>
         </section>
 
         <aside class="panel inspector">
-          <section class="section">
+          <section class="section task-control-section">
+            <div class="section-header">
+              <h2>任务控制</h2>
+            </div>
+            <div id="activeTaskStatus" class="active-task-status">暂无当前任务</div>
+            <form id="taskForm" class="stack">
+              <textarea id="taskGoalInput" rows="4" placeholder="发布一个新任务。同一协作室同一时间只能有一个任务。"></textarea>
+              <div class="split">
+                <button type="submit">发布任务</button>
+                <button id="cancelTaskButton" type="button" class="danger-button">终止任务</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="section task-flow-section">
             <div class="section-header">
               <h2>任务流</h2>
             </div>
@@ -76,7 +91,111 @@
           </section>
         </aside>
       </main>
+
+      <section id="configView" class="config-view hidden">
+        <div class="config-top">
+          <div>
+            <h2>配置工作台</h2>
+            <p id="configStatus">配置 OpenClaw agent 文件与 TeamRoom 协作模板</p>
+          </div>
+          <button id="closeConfigButton" type="button" class="secondary-button">返回协作室</button>
+        </div>
+
+        <div class="config-workbench">
+          <nav class="config-nav" aria-label="配置分类">
+            <button type="button" class="config-tab active" data-config-tab="agent-files">Agent 文件</button>
+            <button type="button" class="config-tab" data-config-tab="teamroom-policy">TeamRoom 协作</button>
+          </nav>
+
+          <section id="agentFilesPanel" class="config-panel">
+            <div class="config-panel-head">
+              <div>
+                <h3>OpenClaw Agent 文件</h3>
+                <p>查看并修改当前 OpenClaw agent 工作区中的 7 个 `.md` 文件。</p>
+              </div>
+              <button id="saveAgentFileButton" type="button">保存文件</button>
+            </div>
+            <div class="config-toolbar">
+              <label class="field-label">
+                <span>Agent</span>
+                <select id="configAgentSelect"></select>
+              </label>
+              <div id="agentFileWorkspace" class="path-note">未加载工作区</div>
+            </div>
+            <div id="agentFileTabs" class="file-tabs"></div>
+            <textarea id="agentFileEditor" class="config-editor" spellcheck="false" placeholder="选择 agent 和文件后加载内容"></textarea>
+          </section>
+
+          <section id="teamroomPolicyPanel" class="config-panel hidden">
+            <div class="config-panel-head">
+              <div>
+                <h3>TeamRoom 协作模板</h3>
+                <p>配置总控职责、上下文拼接方式、前序 agent 输出如何进入后续 prompt。</p>
+              </div>
+              <div class="config-actions">
+                <button id="resetPolicyTemplatesButton" type="button" class="secondary-button">恢复默认模板</button>
+                <button id="savePolicyConfigButton" type="button">保存协作配置</button>
+              </div>
+            </div>
+            <div class="config-toolbar">
+              <label class="field-label">
+                <span>协作室</span>
+                <select id="configRoomSelect"></select>
+              </label>
+              <label class="field-label">
+                <span>JSON 失败兜底派工</span>
+                <select id="configFallbackDispatchInput">
+                  <option value="none">不兜底派工</option>
+                  <option value="keyword">按关键词/标签匹配</option>
+                  <option value="all">全部 specialist 兜底</option>
+                </select>
+              </label>
+              <label class="check-row">
+                <input id="configRequireReviewInput" type="checkbox" />
+                <span>启用总控最终复核</span>
+              </label>
+            </div>
+            <div class="config-grid">
+              <label class="field-label">
+                <span>历史任务注入数</span>
+                <input id="configRoomContextLimitInput" type="number" min="0" max="20" />
+              </label>
+              <label class="field-label">
+                <span>当前任务人工消息注入数</span>
+                <input id="configTaskMessageLimitInput" type="number" min="0" max="50" />
+              </label>
+            </div>
+            <div id="promptPlaceholders" class="placeholder-strip"></div>
+            <div class="template-grid">
+              <label class="field-label">
+                <span>Supervisor 派工 prompt 模板</span>
+                <textarea id="supervisorDispatchTemplateInput" class="template-editor" spellcheck="false"></textarea>
+              </label>
+              <label class="field-label">
+                <span>Specialist 执行 prompt 模板</span>
+                <textarea id="specialistWorkTemplateInput" class="template-editor" spellcheck="false"></textarea>
+              </label>
+              <label class="field-label">
+                <span>Supervisor 复核 prompt 模板</span>
+                <textarea id="supervisorReviewTemplateInput" class="template-editor" spellcheck="false"></textarea>
+              </label>
+              <label class="field-label">
+                <span>前序 agent 输出拼接模板</span>
+                <textarea id="previousOutputItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+              </label>
+              <label class="field-label">
+                <span>协作室历史任务拼接模板</span>
+                <textarea id="roomContextItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+              </label>
+              <label class="field-label">
+                <span>人工补充消息拼接模板</span>
+                <textarea id="taskMessageItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+              </label>
+            </div>
+          </section>
+        </div>
+      </section>
     </div>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="/app.js?v=20260507-markdown-table-1"></script>
   </body>
 </html>

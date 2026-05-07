@@ -66,7 +66,21 @@ A room is the collaboration boundary. It contains members, a policy, tasks, and 
   "policy": {
     "mode": "supervisor",
     "requireReview": true,
-    "maxParallel": 2
+    "maxParallel": 2,
+    "fallbackDispatch": "none",
+    "roomContextLimit": 6,
+    "taskMessageLimit": 12,
+    "supervisorExtraPrompt": "",
+    "specialistExtraPrompt": "",
+    "reviewExtraPrompt": "",
+    "promptTemplates": {
+      "supervisorDispatch": "...",
+      "specialistWork": "...",
+      "supervisorReview": "...",
+      "previousOutputItem": "...",
+      "roomContextItem": "...",
+      "taskMessageItem": "..."
+    }
   },
   "members": []
 }

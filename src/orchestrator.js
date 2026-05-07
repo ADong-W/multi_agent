@@ -1,4 +1,5 @@
-import { createTaskGraph, findSupervisorMember, normalizePolicy, selectAgent } from "./policy.js";
+import { createTaskGraph, findSupervisorMember, inferCapabilities, normalizePolicy, selectAgent } from "./policy.js";
+import { normalizePromptTemplates, renderTemplate } from "./prompt-templates.js";
 import { createId, nowIso } from "./utils.js";
 
 export class Orchestrator {
@@ -20,6 +21,12 @@ export class Orchestrator {
     if (!request.goal || !String(request.goal).trim()) {
       const error = new Error("Task goal is required");
       error.statusCode = 400;
+      throw error;
+    }
+    const activeTask = await this.store.getActiveTask(roomId);
+    if (activeTask) {
+      const error = new Error(`Room already has an active task: ${activeTask.goal}`);
+      error.statusCode = 409;
       throw error;
     }
 
@@ -51,6 +58,108 @@ export class Orchestrator {
     return task;
   }
 
+  async submitHumanMessage(roomId, request) {
+    const room = await this.store.getRoom(roomId);
+    if (!room) {
+      const error = new Error(`Room not found: ${roomId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    const content = String(request.content || request.message || "").trim();
+    if (!content) {
+      const error = new Error("Message content is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const activeTask = await this.store.getActiveTask(roomId);
+    const event = await this.events.publish(roomId, "message.created", {
+      taskId: activeTask?.id,
+      author: "human",
+      content
+    });
+
+    let resumed = false;
+    if (activeTask && shouldResumeFromMessage(content)) {
+      resumed = await this.resumeTask(activeTask.id, content);
+    }
+    return { event, message: { content }, activeTask, resumed };
+  }
+
+  async cancelTask(roomId, taskId, reason = "Terminated by human operator.") {
+    const task = await this.store.getTask(taskId);
+    if (!task || task.roomId !== roomId) {
+      const error = new Error(`Task not found: ${taskId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    if (["completed", "cancelled"].includes(task.status)) {
+      return task;
+    }
+
+    task.status = "cancelled";
+    task.cancelRequested = true;
+    task.cancelledAt = nowIso();
+    task.error = null;
+    for (const stage of task.stages || []) {
+      if (["queued", "running", "failed"].includes(stage.status)) {
+        stage.status = "cancelled";
+        stage.error = reason;
+      }
+      if (stage.assignedAgentId) {
+        this.busyAgents.delete(stage.assignedAgentId);
+        await this.store.setMemberStatus(roomId, stage.assignedAgentId, "idle");
+      }
+    }
+    await this.store.updateTask(task);
+    await this.events.publish(roomId, "task.cancelled", {
+      taskId: task.id,
+      reason
+    });
+    return task;
+  }
+
+  async resumeTask(taskId, humanInstruction = "") {
+    const task = await this.store.getTask(taskId);
+    if (!task) {
+      return false;
+    }
+    if (["completed", "cancelled"].includes(task.status)) {
+      return false;
+    }
+    if (this.runningTasks.has(taskId)) {
+      await this.events.publish(task.roomId, "task.resume_skipped", {
+        taskId,
+        reason: "Task is already running."
+      });
+      return false;
+    }
+
+    task.status = "queued";
+    task.error = null;
+    task.resumeInstruction = String(humanInstruction || "").trim();
+    task.resumeRequestedAt = nowIso();
+    for (const stage of task.stages || []) {
+      if (["running", "failed"].includes(stage.status)) {
+        stage.status = "queued";
+        stage.error = null;
+        stage.startedAt = null;
+      }
+    }
+    await this.store.updateTask(task);
+    await this.events.publish(task.roomId, "task.resumed", {
+      taskId,
+      instruction: task.resumeInstruction
+    });
+
+    queueMicrotask(() => {
+      this.runTask(task.id).catch(async (error) => {
+        await this.failTask(task.id, error);
+      });
+    });
+    return true;
+  }
+
   async runTask(taskId) {
     if (this.runningTasks.has(taskId)) {
       return;
@@ -58,6 +167,10 @@ export class Orchestrator {
     this.runningTasks.add(taskId);
 
     const task = await this.store.getTask(taskId);
+    if (!task || ["completed", "cancelled"].includes(task.status)) {
+      this.runningTasks.delete(taskId);
+      return;
+    }
     const room = await this.store.getRoom(task.roomId);
     if (!room) {
       throw new Error(`Room not found: ${task.roomId}`);
@@ -67,18 +180,28 @@ export class Orchestrator {
     }
 
     task.status = "running";
+    task.cancelRequested = false;
     await this.store.updateTask(task);
     await this.events.publish(room.id, "task.running", { taskId: task.id });
 
-    const previousOutputs = [];
-    const roomContext = await this.buildRoomContext(room.id, task.id);
+    const previousOutputs = collectCompletedOutputs(task);
+    const roomContext = await this.buildRoomContext(room.id, task.id, normalizePolicy(room.policy));
     const assignmentCounts = new Map();
     try {
-      let index = 0;
+      let index = firstIncompleteStageIndex(task.stages);
       while (index < task.stages.length) {
+        const persisted = await this.store.getTask(task.id);
+        if (!persisted || persisted.status === "cancelled" || persisted.cancelRequested) {
+          return;
+        }
+        Object.assign(task, persisted);
         const latestRoom = await this.store.getRoom(room.id);
         const policy = normalizePolicy(latestRoom.policy);
         const stage = task.stages[index];
+        if (stage.status === "completed") {
+          index += 1;
+          continue;
+        }
         const member = selectAgent({
           room: latestRoom,
           stage,
@@ -113,13 +236,15 @@ export class Orchestrator {
           title: stage.title
         });
 
+        const taskMessages = await this.buildTaskMessages(room.id, task.id, policy);
         const input = buildAgentInput({
           room: latestRoom,
           task,
           stage,
           member,
           previousOutputs,
-          roomContext
+          roomContext,
+          taskMessages
         });
 
         const result = await this.adapter.runAgent(member.agentId, input, {
@@ -129,8 +254,17 @@ export class Orchestrator {
           stageType: stage.type,
           goal: task.goal,
           previousOutputs,
-          roomContext
+          roomContext,
+          taskMessages,
+          resumeInstruction: task.resumeInstruction || ""
         });
+
+        const afterRun = await this.store.getTask(task.id);
+        if (!afterRun || afterRun.status === "cancelled" || afterRun.cancelRequested) {
+          this.busyAgents.delete(member.agentId);
+          await this.store.setMemberStatus(room.id, member.agentId, "idle");
+          return;
+        }
 
         stage.status = "completed";
         stage.completedAt = nowIso();
@@ -220,6 +354,15 @@ export class Orchestrator {
     }
     task.status = "failed";
     task.error = error.message;
+    const runningStage = task.stages?.find((stage) => stage.status === "running");
+    if (runningStage) {
+      runningStage.status = "failed";
+      runningStage.error = error.message;
+      if (runningStage.assignedAgentId) {
+        this.busyAgents.delete(runningStage.assignedAgentId);
+        await this.store.setMemberStatus(task.roomId, runningStage.assignedAgentId, "failed");
+      }
+    }
     await this.store.updateTask(task);
     await this.events.publish(task.roomId, "task.failed", {
       taskId,
@@ -227,11 +370,15 @@ export class Orchestrator {
     });
   }
 
-  async buildRoomContext(roomId, currentTaskId) {
+  async buildRoomContext(roomId, currentTaskId, policy = {}) {
+    const limit = normalizePolicy(policy).roomContextLimit;
+    if (limit <= 0) {
+      return [];
+    }
     const tasks = await this.store.listTasks(roomId);
     return tasks
       .filter((item) => item.id !== currentTaskId && item.status === "completed")
-      .slice(0, 6)
+      .slice(0, limit)
       .reverse()
       .map((item) => {
         const finalStage = [...(item.stages || [])].reverse().find((stage) => stage.result?.summary);
@@ -243,25 +390,49 @@ export class Orchestrator {
         };
       });
   }
+
+  async buildTaskMessages(roomId, taskId, policy = {}) {
+    const limit = normalizePolicy(policy).taskMessageLimit;
+    if (limit <= 0) {
+      return [];
+    }
+    const events = await this.store.listEvents(roomId, 200);
+    return events
+      .filter((event) => event.type === "message.created")
+      .filter((event) => !event.payload?.taskId || event.payload.taskId === taskId)
+      .slice(-limit)
+      .map((event) => ({
+        author: event.payload?.author || "human",
+        content: event.payload?.content || "",
+        timestamp: event.timestamp
+      }));
+  }
 }
 
-function buildAgentInput({ room, task, stage, member, previousOutputs, roomContext }) {
+function buildAgentInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages }) {
   if (stage.type === "supervisor_dispatch") {
-    return buildSupervisorDispatchInput({ room, task, member, roomContext });
+    return buildSupervisorDispatchInput({ room, task, member, roomContext, taskMessages });
   }
   if (stage.type === "specialist_work") {
-    return buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext });
+    return buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages });
   }
   if (stage.type === "supervisor_review") {
-    return buildSupervisorReviewInput({ room, task, stage, member, previousOutputs, roomContext });
+    return buildSupervisorReviewInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages });
   }
 
+  const policy = normalizePolicy(room.policy);
+  const templates = normalizePromptTemplates(policy.promptTemplates);
+  const values = buildPromptValues({ room, task, stage, member, previousOutputs, roomContext, taskMessages, policy, templates });
   return [
     `You are ${member.name || member.agentId}, participating in OpenClaw TeamRoom.`,
     `Room: ${room.name}`,
     `Room members: ${formatRoomMembers(room.members || [])}`,
     "Shared room context:",
-    formatRoomContext(roomContext),
+    values.roomContext,
+    "",
+    "Human collaboration messages for the current task:",
+    values.taskMessages,
+    values.resumeInstruction,
     "",
     `Goal: ${task.goal}`,
     `Current stage: ${stage.title} (${stage.type})`,
@@ -269,9 +440,7 @@ function buildAgentInput({ room, task, stage, member, previousOutputs, roomConte
     "You own this stage. Build on previous outputs from other agents and hand off useful context to the next agent.",
     "",
     "Previous stage outputs:",
-    previousOutputs.length
-      ? previousOutputs.map((item) => `- ${item.title} by ${item.agentId}: ${item.result.summary}`).join("\n")
-      : "- None",
+    values.previousOutputs,
     "",
     "Return a concise result with: status, summary, artifacts, and next_actions."
   ].join("\n");
@@ -311,23 +480,87 @@ function normalizeAgentResult(result) {
   };
 }
 
-function buildSupervisorDispatchInput({ room, task, member, roomContext }) {
+function buildSupervisorDispatchInput({ room, task, member, roomContext, taskMessages }) {
+  const policy = normalizePolicy(room.policy);
+  const templates = normalizePromptTemplates(policy.promptTemplates);
+  return renderTemplate(templates.supervisorDispatch, buildPromptValues({
+    room,
+    task,
+    member,
+    previousOutputs: [],
+    roomContext,
+    taskMessages,
+    policy,
+    templates
+  }));
+}
+
+function buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages }) {
+  const policy = normalizePolicy(room.policy);
+  const templates = normalizePromptTemplates(policy.promptTemplates);
+  return renderTemplate(templates.specialistWork, buildPromptValues({
+    room,
+    task,
+    stage,
+    member,
+    previousOutputs,
+    roomContext,
+    taskMessages,
+    policy,
+    templates
+  }));
+}
+
+function buildSupervisorReviewInput({ room, task, member, previousOutputs, roomContext, taskMessages }) {
+  const policy = normalizePolicy(room.policy);
+  const templates = normalizePromptTemplates(policy.promptTemplates);
+  return renderTemplate(templates.supervisorReview, buildPromptValues({
+    room,
+    task,
+    member,
+    previousOutputs,
+    roomContext,
+    taskMessages,
+    policy,
+    templates
+  }));
+}
+
+function buildPromptValues({ room, task, stage = {}, member, previousOutputs, roomContext, taskMessages, policy, templates }) {
+  return {
+    agentId: member.agentId,
+    agentName: member.name || member.agentId,
+    roomName: room.name,
+    roomMembers: formatRoomMembers(room.members || []),
+    goal: task.goal,
+    memberRoles: (member.roles || []).join(", ") || "none",
+    memberCapabilities: (member.capabilities || []).join(", ") || "general",
+    roomContext: formatRoomContext(roomContext, templates),
+    taskMessages: formatTaskMessages(taskMessages, templates),
+    previousOutputs: formatPreviousOutputs(previousOutputs, templates),
+    stageTitle: stage.title || "",
+    stageType: stage.type || "",
+    stageGoal: stage.goal || stage.title || "",
+    stageNeeds: (stage.needs || []).join(", ") || "general",
+    stageReason: stage.reason || "未指定。",
+    resumeInstruction: task.resumeInstruction ? `续跑指令: ${task.resumeInstruction}` : "",
+    dispatchJsonContract: dispatchJsonContract(),
+    supervisorExtraPrompt: policy.supervisorExtraPrompt ? `协作室自定义总控指导:\n${policy.supervisorExtraPrompt}` : "",
+    specialistExtraPrompt: policy.specialistExtraPrompt ? `协作室自定义子 Agent 指导:\n${policy.specialistExtraPrompt}` : "",
+    reviewExtraPrompt: policy.reviewExtraPrompt ? `协作室自定义复核指导:\n${policy.reviewExtraPrompt}` : "",
+    fallbackWarning: policy.fallbackDispatch === "none"
+      ? "注意: 如果你不输出可解析 JSON，TeamRoom 不会兜底安排任何子 agent。"
+      : ""
+  };
+}
+
+function dispatchJsonContract() {
   return [
-    `你是 ${member.name || member.agentId}，在 OpenClaw TeamRoom 中担任 Supervisor / 总控 Agent。`,
-    `协作室: ${room.name}`,
-    "可调度成员:",
-    formatRoomMembers(room.members || []),
-    "",
-    "协作室共享上下文（来自本协作室已完成的历史任务，后续任务默认需要继承这些背景）:",
-    formatRoomContext(roomContext),
-    "",
-    `用户需求: ${task.goal}`,
-    "",
-    "请先做需求理解和影响范围判断，然后给出子 agent 协作计划。",
     "重要约束:",
     "- TeamRoom 只负责协作管控和可视化，业务拆题权在你这里。",
     "- 只从上面的可调度成员中选择 agent_id。",
     "- 不要为了热闹而安排无关 agent；如果某类交付件不受影响，可以不安排。",
+    "- 如果无法判断需要哪个专业 agent，请返回空的 subtasks，并把问题写入 confirmation_points，不要把任务派给所有 agent 当作兜底。",
     "- 如果存在需要 BA 或业务方确认的点，请写入 confirmation_points。",
     "",
     "请在回答中包含下面这个机器可读 JSON 块，TeamRoom 会据此派发子任务:",
@@ -345,84 +578,59 @@ function buildSupervisorDispatchInput({ room, task, member, roomContext }) {
       ],
       confirmation_points: ["需要人工确认的问题"]
     }, null, 2),
-    "TEAMROOM_DISPATCH_JSON_END",
-    "",
-    "JSON 之外可以用简短中文解释你的判断。"
+    "TEAMROOM_DISPATCH_JSON_END"
   ].join("\n");
 }
 
-function buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext }) {
-  const dispatch = previousOutputs.find((item) => item.title === "Supervisor Dispatch");
-  return [
-    `你是 ${member.name || member.agentId}，在 OpenClaw TeamRoom 中担任专业子 Agent。`,
-    `协作室: ${room.name}`,
-    `用户需求: ${task.goal}`,
-    `Supervisor 分配给你的任务: ${stage.goal || stage.title}`,
-    stage.reason ? `分配原因: ${stage.reason}` : "",
-    "",
-    "协作室共享上下文（来自本协作室已完成的历史任务）:",
-    formatRoomContext(roomContext),
-    "",
-    "Supervisor 的拆题结果:",
-    dispatch?.result?.summary || "无",
-    "",
-    "请只处理你负责的专业范围，输出:",
-    "- 你的判断结论",
-    "- 对相关交付件的新增/修改/删除建议",
-    "- 需要其他 agent 或 BA 确认的问题",
-    "- 可交付的结构化结果或下一步动作",
-    "",
-    "如果你判断该需求与你的专业范围无关，请明确说明“无影响”，不要编造交付件变化。"
-  ].filter(Boolean).join("\n");
-}
-
-function buildSupervisorReviewInput({ room, task, member, previousOutputs, roomContext }) {
-  return [
-    `你是 ${member.name || member.agentId}，在 OpenClaw TeamRoom 中担任 Supervisor / 总控 Agent。`,
-    `协作室: ${room.name}`,
-    `用户需求: ${task.goal}`,
-    "",
-    "协作室共享上下文（来自本协作室已完成的历史任务）:",
-    formatRoomContext(roomContext),
-    "",
-    "下面是各阶段输出:",
-    previousOutputs.map((item) => [
-      `## ${item.title} by ${item.agentId}`,
-      item.result.summary
-    ].join("\n")).join("\n\n"),
-    "",
-    "请做最终审核和汇总，重点检查:",
-    "- 子 agent 结论之间是否一致",
-    "- 是否遗漏维度、模型、表单、权限、规则、集成或作业流影响",
-    "- 哪些点需要 BA 或业务方确认",
-    "- 下一步应该生成或更新哪些交付件",
-    "",
-    "请给出面向实施 BA 的简洁结论。"
-  ].join("\n");
-}
-
-function formatRoomContext(roomContext = []) {
+function formatRoomContext(roomContext = [], templates = {}) {
   if (!roomContext.length) {
     return "- 暂无历史任务上下文。";
   }
-  return roomContext.map((item, index) => [
-    `### 历史任务 ${index + 1}: ${item.goal}`,
-    item.completedAt ? `完成时间: ${item.completedAt}` : "",
-    item.summary
-  ].filter(Boolean).join("\n")).join("\n\n");
+  return roomContext.map((item, index) => renderTemplate(templates.roomContextItem, {
+    index: index + 1,
+    goal: item.goal,
+    status: item.status || "completed",
+    completedAt: item.completedAt || "",
+    summary: item.summary || ""
+  })).join("\n\n");
+}
+
+function formatTaskMessages(taskMessages = [], templates = {}) {
+  if (!taskMessages.length) {
+    return "- 暂无。";
+  }
+  return taskMessages
+    .map((item) => renderTemplate(templates.taskMessageItem, {
+      timestamp: item.timestamp || "",
+      author: item.author || "human",
+      content: item.content || ""
+    }))
+    .join("\n");
+}
+
+function formatPreviousOutputs(previousOutputs = [], templates = {}) {
+  if (!previousOutputs.length) {
+    return "- 无。";
+  }
+  return previousOutputs.map((item, index) => renderTemplate(templates.previousOutputItem, {
+    index: index + 1,
+    title: item.title || "Stage Output",
+    agentId: item.agentId || "",
+    summary: item.result?.summary || ""
+  })).join("\n\n");
 }
 
 function createSupervisorFollowUpStages({ room, task, dispatchStage, policy }) {
   const supervisor = findSupervisorMember(room.members || []);
-  const subtasks = parseDispatchSubtasks(dispatchStage.result?.summary || "");
+  const dispatch = parseDispatchPlan(dispatchStage.result?.summary || "");
   const allowedAgentIds = new Set((room.members || []).map((member) => member.agentId));
-  const normalizedSubtasks = subtasks
+  const normalizedSubtasks = (dispatch.subtasks || [])
     .map((subtask, index) => normalizeSubtask(subtask, index))
     .filter((subtask) => subtask.agentId && allowedAgentIds.has(subtask.agentId));
 
-  const workItems = normalizedSubtasks.length > 0
+  const workItems = dispatch.parsed
     ? normalizedSubtasks
-    : fallbackSpecialistSubtasks({ room, task, supervisor });
+    : fallbackSpecialistSubtasks({ room, task, supervisor, policy });
 
   const stages = workItems.map((item, index) => createRuntimeStage({
     type: "specialist_work",
@@ -433,7 +641,7 @@ function createSupervisorFollowUpStages({ room, task, dispatchStage, policy }) {
     reason: item.reason
   }));
 
-  if (policy.requireReview && supervisor) {
+  if (stages.length > 0 && policy.requireReview && supervisor) {
     stages.push(createRuntimeStage({
       type: "supervisor_review",
       title: "Supervisor Review",
@@ -447,10 +655,12 @@ function createSupervisorFollowUpStages({ room, task, dispatchStage, policy }) {
   return stages;
 }
 
-function parseDispatchSubtasks(text) {
+function parseDispatchPlan(text) {
   const parsed = parseDispatchJson(text);
-  const subtasks = Array.isArray(parsed?.subtasks) ? parsed.subtasks : [];
-  return subtasks;
+  return {
+    parsed: Boolean(parsed),
+    subtasks: Array.isArray(parsed?.subtasks) ? parsed.subtasks : []
+  };
 }
 
 function parseDispatchJson(text) {
@@ -494,19 +704,48 @@ function normalizeSubtask(subtask, index) {
   };
 }
 
-function fallbackSpecialistSubtasks({ room, task, supervisor }) {
+function fallbackSpecialistSubtasks({ room, task, supervisor, policy }) {
+  const fallbackDispatch = normalizePolicy(policy).fallbackDispatch;
+  if (fallbackDispatch === "none") {
+    return [];
+  }
+  const inferred = new Set(inferCapabilities(task.goal)
+    .filter((item) => !["general", "domain", "specialist"].includes(item)));
+
   return (room.members || [])
     .filter((member) => member.agentId !== supervisor?.agentId)
-    .map((member) => {
-      const needs = inferSpecialistNeeds(member);
+    .map((member) => ({
+      member,
+      needs: inferSpecialistNeeds(member)
+    }))
+    .filter(({ member, needs }) => (
+      fallbackDispatch === "all"
+      || (inferred.size > 0 && matchesInferredCapabilities(member, needs, inferred))
+    ))
+    .map(({ member, needs }) => {
       return {
         agentId: member.agentId,
         title: `${domainTitle(needs)}影响判断`,
         goal: `从${domainTitle(needs)}视角判断用户需求的影响范围，并说明是否需要更新对应交付件。用户需求: ${task.goal}`,
         needs,
-        reason: "Supervisor did not return a machine-readable dispatch plan; TeamRoom asks room specialists to assess impact as a fallback."
+        reason: "Supervisor did not return a machine-readable dispatch plan; TeamRoom selected this specialist because its tags match the task keywords."
       };
     });
+}
+
+function matchesInferredCapabilities(member, needs, inferred) {
+  const memberTags = new Set([
+    ...(member.roles || []),
+    ...(member.capabilities || []),
+    ...(needs || [])
+  ].map((item) => String(item).toLowerCase()));
+
+  for (const capability of inferred) {
+    if (memberTags.has(capability)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function inferSpecialistNeeds(member) {
@@ -583,4 +822,34 @@ function renumberStages(stages) {
   stages.forEach((stage, index) => {
     stage.order = index;
   });
+}
+
+function collectCompletedOutputs(task) {
+  return (task.stages || [])
+    .filter((stage) => stage.status === "completed" && stage.result)
+    .map((stage) => ({
+      stageId: stage.id,
+      title: stage.title,
+      agentId: stage.assignedAgentId,
+      result: stage.result
+    }));
+}
+
+function firstIncompleteStageIndex(stages = []) {
+  const index = stages.findIndex((stage) => stage.status !== "completed");
+  return index >= 0 ? index : stages.length;
+}
+
+function shouldResumeFromMessage(content) {
+  const normalized = String(content || "").toLowerCase();
+  return [
+    "继续",
+    "续跑",
+    "接着",
+    "恢复",
+    "继续任务",
+    "resume",
+    "continue",
+    "go on"
+  ].some((keyword) => normalized.includes(keyword));
 }
