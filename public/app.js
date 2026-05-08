@@ -1084,7 +1084,7 @@ function renderMemberGraph(room) {
         ${renderMemberGraphNode(supervisor, {
           kind: "supervisor",
           active: activeAgentId === supervisor.agentId,
-          dim: dimOthers && activeAgentId !== supervisor.agentId
+          dim: false
         })}
       </div>
       <div class="member-row specialist-row">
@@ -1103,15 +1103,29 @@ function renderMemberGraph(room) {
 
 function renderMemberGraphNode(member, { kind, active, dim }) {
   const label = member.name || member.agentId;
+  const badge = kind === "supervisor" ? "CORE ENGINE" : "AGENT";
+  const subtitle = kind === "supervisor"
+    ? "解析 · 分发 · 验收"
+    : compactMemberCapabilities(member);
   return `
     <span
       class="member-node ${escapeHtml(kind)} ${active ? "active" : ""} ${dim ? "dim" : ""}"
       data-member-node="${escapeHtml(member.agentId)}"
       title="${escapeHtml(label)}"
     >
-      ${escapeHtml(label)}
+      <span class="member-node-badge">${escapeHtml(badge)}</span>
+      <span class="member-node-name">${escapeHtml(label)}</span>
+      <span class="member-node-subtitle">${escapeHtml(subtitle)}</span>
     </span>
   `;
+}
+
+function compactMemberCapabilities(member) {
+  const tags = [
+    ...(member.capabilities || []),
+    ...(member.roles || [])
+  ].filter((tag) => !["specialist", "domain"].includes(String(tag).toLowerCase()));
+  return tags.slice(0, 3).join(" · ") || "协作执行";
 }
 
 function drawMemberGraphLines() {
@@ -1143,10 +1157,11 @@ function drawMemberGraphLines() {
     const y2 = rect.top - graphRect.top + 1;
     const agentId = node.dataset.memberNode;
     const active = activeAgentId && activeAgentId !== supervisorAgentId && activeAgentId === agentId;
+    const dim = activeAgentId && !active;
     const midY = y1 + Math.max(10, (y2 - y1) * 0.45);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("d", `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
-    path.setAttribute("class", `member-graph-line ${active ? "active" : ""}`);
+    path.setAttribute("class", `member-graph-line ${active ? "active" : ""} ${dim ? "dim" : ""}`);
     svg.appendChild(path);
   }
 }
