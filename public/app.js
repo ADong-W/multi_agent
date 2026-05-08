@@ -116,9 +116,9 @@ const els = {
   savePolicyConfigButton: document.querySelector("#savePolicyConfigButton"),
   tokenInput: document.querySelector("#tokenInput"),
   saveTokenButton: document.querySelector("#saveTokenButton"),
+  createRoomButton: document.querySelector("#createRoomButton"),
   roomForm: document.querySelector("#roomForm"),
   roomNameInput: document.querySelector("#roomNameInput"),
-  policyModeInput: document.querySelector("#policyModeInput"),
   roomsList: document.querySelector("#roomsList"),
   refreshAgentsButton: document.querySelector("#refreshAgentsButton"),
   agentsList: document.querySelector("#agentsList"),
@@ -149,6 +149,13 @@ window.addEventListener("resize", () => {
 
 els.refreshAgentsButton.addEventListener("click", () => {
   loadAgents();
+});
+
+els.createRoomButton.addEventListener("click", () => {
+  els.roomForm.classList.toggle("hidden");
+  if (!els.roomForm.classList.contains("hidden")) {
+    els.roomNameInput.focus();
+  }
 });
 
 els.openConfigButton.addEventListener("click", async () => {
@@ -197,11 +204,10 @@ els.resetPolicyTemplatesButton.addEventListener("click", () => {
 els.roomForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const name = els.roomNameInput.value.trim() || "实施设计协作室";
-  const mode = els.policyModeInput.value;
   const payload = {
     name,
     policy: {
-      mode,
+      mode: "supervisor",
       requireReview: true,
       maxParallel: 2
     }
@@ -211,6 +217,7 @@ els.roomForm.addEventListener("submit", async (event) => {
     body: payload
   });
   els.roomNameInput.value = "";
+  els.roomForm.classList.add("hidden");
   state.activeRoomId = room.id;
   localStorage.setItem("teamroom.activeRoomId", room.id);
   await refreshAll();
@@ -572,7 +579,7 @@ function renderRooms() {
         <span>${escapeHtml(room.name)}</span>
         <button type="button" class="danger-button" data-delete-room="${escapeHtml(room.id)}" title="删除协作室">删除</button>
       </div>
-      <div class="meta">${escapeHtml(policyLabel(room.policy?.mode || "supervisor"))} · ${room.members?.length || 0} agents</div>
+      <div class="meta">${room.members?.length || 0} agents</div>
     </div>
   `).join("");
   els.roomsList.scrollTop = previousScrollTop;

@@ -345,6 +345,10 @@ textarea:focus {
   overflow: hidden;
 }
 
+.rooms-section:has(.compact-create.hidden) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .section-header,
 .conversation-header {
   display: flex;
@@ -386,6 +390,17 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
+}
+
+.compact-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.compact-create button {
+  min-width: 54px;
 }
 
 .list {
@@ -492,8 +507,8 @@ summary::-webkit-details-marker {
 }
 
 .item-title button {
-  min-height: 22px;
-  padding: 0 7px;
+  min-height: 20px;
+  padding: 0 6px;
   font-size: 11px;
 }
 

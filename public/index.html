@@ -25,19 +25,11 @@
           <section class="section rooms-section">
             <div class="section-header">
               <h2>协作室</h2>
+              <button id="createRoomButton" class="icon-button" type="button" title="新建协作室">+</button>
             </div>
-            <form id="roomForm" class="stack">
+            <form id="roomForm" class="compact-create hidden">
               <input id="roomNameInput" name="name" placeholder="协作室名称" />
-              <div class="split">
-                <select id="policyModeInput" name="mode">
-                  <option value="supervisor">Supervisor 驱动</option>
-                  <option value="capability">能力匹配</option>
-                  <option value="leader">Leader 接力</option>
-                  <option value="round_robin">轮转</option>
-                  <option value="manual">手动</option>
-                </select>
-                <button type="submit">新建</button>
-              </div>
+              <button type="submit">创建</button>
             </form>
             <div id="roomsList" class="list"></div>
           </section>
