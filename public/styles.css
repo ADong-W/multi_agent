@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  --topbar-height: 76px;
+  --topbar-height: 68px;
   --bg: #e9eff2;
   --surface: #ffffff;
   --surface-raised: #f9fbfb;
@@ -61,8 +61,9 @@ button {
   background: var(--accent);
   color: #fff;
   cursor: pointer;
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.24) inset, 0 8px 18px rgba(12, 124, 114, 0.16);
@@ -112,7 +113,8 @@ textarea {
   border-radius: 7px;
   background: var(--surface-raised);
   color: var(--text);
-  padding: 9px 11px;
+  padding: 7px 9px;
+  font-size: 13px;
   outline: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
@@ -140,7 +142,7 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px;
+  padding: 0 24px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background:
     linear-gradient(90deg, rgba(12, 124, 114, 0.24), transparent 36%),
@@ -159,7 +161,7 @@ textarea:focus {
 
 .topbar h1 {
   color: #f8fbfc;
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 850;
   line-height: 1.2;
   letter-spacing: 0.01em;
@@ -170,7 +172,7 @@ textarea:focus {
 .meta,
 .empty {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .topbar p {
@@ -215,7 +217,7 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: min(520px, 50vw);
+  width: min(500px, 50vw);
 }
 
 .topbar-actions input {
@@ -247,17 +249,17 @@ textarea:focus {
 }
 
 .icon-button {
-  width: 36px;
-  min-width: 36px;
+  width: 32px;
+  min-width: 32px;
   padding: 0;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(292px, 332px) minmax(500px, 1fr) minmax(332px, 392px);
-  gap: 18px;
-  padding: 18px;
+  grid-template-columns: minmax(280px, 320px) minmax(480px, 1fr) minmax(320px, 372px);
+  gap: 14px;
+  padding: 14px;
   height: calc(100vh - var(--topbar-height));
   min-height: 0;
   overflow: hidden;
@@ -316,7 +318,7 @@ textarea:focus {
 }
 
 .section {
-  padding: 16px;
+  padding: 12px;
   border-bottom: 1px solid var(--border);
   min-height: 0;
 }
@@ -343,14 +345,14 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .section h2,
 .conversation-header h2 {
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0;
 }
@@ -364,15 +366,15 @@ textarea:focus {
 .section h2::before {
   content: "";
   width: 5px;
-  height: 17px;
+  height: 15px;
   border-radius: 2px;
   background: linear-gradient(180deg, var(--accent), var(--blue));
 }
 
 .stack {
   display: grid;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 7px;
+  margin-bottom: 10px;
 }
 
 .split {
@@ -383,7 +385,7 @@ textarea:focus {
 
 .list {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 #roomsList,
@@ -401,13 +403,13 @@ textarea:focus {
 
 #roomsList,
 #agentsList > * + * {
-  margin-top: 8px;
+  margin-top: 7px;
 }
 
 #roomsList {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 7px;
   margin-top: 0;
 }
 
@@ -418,7 +420,7 @@ textarea:focus {
 .item {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 9px;
+  padding: 7px 8px;
   background: var(--surface-raised);
   box-shadow: var(--shadow-inset);
   transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
@@ -476,7 +478,7 @@ summary::-webkit-details-marker {
   justify-content: space-between;
   gap: 8px;
   font-weight: 760;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.25;
 }
 
@@ -488,13 +490,13 @@ summary::-webkit-details-marker {
 }
 
 .item-title button {
-  min-height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
+  min-height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
 }
 
 .item .meta {
-  margin-top: 4px;
+  margin-top: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -502,7 +504,7 @@ summary::-webkit-details-marker {
 
 .agent-card {
   display: block;
-  min-height: 50px;
+  min-height: 44px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background:
@@ -523,9 +525,9 @@ summary::-webkit-details-marker {
 .task-summary {
   display: grid;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   cursor: pointer;
-  padding: 10px;
+  padding: 8px;
 }
 
 .agent-summary {
@@ -537,8 +539,8 @@ summary::-webkit-details-marker {
 }
 
 .agent-summary {
-  min-height: 50px;
-  padding: 8px 10px;
+  min-height: 44px;
+  padding: 7px 8px;
   border-radius: 10px;
   background: transparent;
   color: var(--text);
@@ -561,7 +563,7 @@ summary::-webkit-details-marker {
 
 .summary-caret {
   color: var(--muted);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
   transform: rotate(0deg);
   transition: transform 0.14s ease;
@@ -571,12 +573,12 @@ summary::-webkit-details-marker {
 .task-card .summary-caret {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--border);
   border-radius: 5px;
   background: #fff;
-  font-size: 15px;
+  font-size: 13px;
 }
 
 details[open] > summary .summary-caret {
@@ -598,7 +600,7 @@ details[open] > summary .summary-caret {
 .task-title {
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 760;
   line-height: 1.35;
 }
@@ -609,15 +611,15 @@ details[open] > summary .summary-caret {
 }
 
 .agent-name {
-  min-height: 18px;
+  min-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-body {
   display: grid;
-  gap: 8px;
-  padding: 10px 12px 12px;
+  gap: 7px;
+  padding: 8px 10px 10px;
   background: #fff;
 }
 
@@ -657,11 +659,11 @@ details[open] > summary .summary-caret {
 
 .member-graph {
   position: relative;
-  min-height: 86px;
+  min-height: 76px;
   display: grid;
   grid-template-rows: auto auto;
-  gap: 18px;
-  padding: 6px 10px 4px;
+  gap: 15px;
+  padding: 5px 8px 4px;
   border: 1px solid rgba(205, 217, 222, 0.72);
   border-radius: 9px;
   background:
@@ -717,7 +719,7 @@ details[open] > summary .summary-caret {
 
 .member-node {
   max-width: 156px;
-  min-height: 28px;
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -726,8 +728,8 @@ details[open] > summary .summary-caret {
   border-radius: 999px;
   background: #f8fbfb;
   color: var(--muted);
-  padding: 4px 11px;
-  font-size: 12px;
+  padding: 3px 9px;
+  font-size: 11px;
   font-weight: 650;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -770,11 +772,11 @@ details[open] > summary .summary-caret {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  min-height: 20px;
   border: 1px solid transparent;
   border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 2px 7px;
+  font-size: 11px;
   font-weight: 650;
   background: var(--surface-quiet);
   color: var(--muted);
@@ -846,9 +848,9 @@ details[open] > summary .summary-caret {
 }
 
 .agent-add-button {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -887,7 +889,7 @@ details[open] > summary .summary-caret {
   display: grid;
   gap: 3px;
   margin-bottom: 10px;
-  padding: 10px 11px;
+  padding: 8px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background:
@@ -952,7 +954,7 @@ details[open] > summary .summary-caret {
 }
 
 .conversation-header {
-  padding: 15px 18px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   margin: 0;
   background:
@@ -962,11 +964,11 @@ details[open] > summary .summary-caret {
 
 .events-feed {
   min-height: 0;
-  padding: 22px 18px;
+  padding: 16px 14px;
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   background:
     linear-gradient(90deg, rgba(47, 95, 188, 0.035) 1px, transparent 1px),
     linear-gradient(180deg, rgba(47, 95, 188, 0.035) 1px, transparent 1px),
@@ -976,15 +978,15 @@ details[open] > summary .summary-caret {
 
 .message-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: end;
-  gap: 10px;
+  gap: 8px;
   max-width: min(820px, 92%);
 }
 
 .message-row.user {
   align-self: flex-end;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) 32px;
 }
 
 .message-row.user .avatar {
@@ -1001,15 +1003,15 @@ details[open] > summary .summary-caret {
 }
 
 .avatar {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 50%;
   border: 1px solid #d8e2e6;
   background: #edf2f4;
   color: #30434c;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 750;
   user-select: none;
   box-shadow: var(--shadow-inset);
@@ -1024,7 +1026,7 @@ details[open] > summary .summary-caret {
 .message-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1037,7 +1039,7 @@ details[open] > summary .summary-caret {
 .message-bubble {
   width: fit-content;
   max-width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 9px 9px 9px 3px;
   background: var(--surface);
@@ -1102,7 +1104,7 @@ details[open] > summary .summary-caret {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 11px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.94);
@@ -1127,7 +1129,7 @@ details[open] > summary .summary-caret {
 .message-markdown {
   color: #202b33;
   font-size: 13px;
-  line-height: 1.62;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
@@ -1156,7 +1158,7 @@ details[open] > summary .summary-caret {
 .message-markdown h5,
 .message-markdown h6 {
   color: #102027;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   line-height: 1.35;
 }
@@ -1257,25 +1259,25 @@ details[open] > summary .summary-caret {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
-  padding: 14px 18px 16px;
+  padding: 12px 14px;
   border-top: 1px solid var(--border);
   background: linear-gradient(180deg, #ffffff 0, #f7fafb 100%);
 }
 
 .chat-form button {
   align-self: end;
-  min-width: 82px;
-  min-height: 42px;
+  min-width: 72px;
+  min-height: 36px;
 }
 
 .chat-form textarea {
-  min-height: 52px;
+  min-height: 44px;
   max-height: 144px;
 }
 
 .task-list {
   display: grid;
-  gap: 12px;
+  gap: 9px;
   align-content: start;
 }
 
@@ -1348,14 +1350,14 @@ details[open] > summary .summary-caret {
 
 .stage-list {
   display: grid;
-  gap: 7px;
-  padding: 10px;
+  gap: 6px;
+  padding: 8px;
 }
 
 .stage {
   display: grid;
   gap: 4px;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid #dce6ea;
   border-radius: 8px;
   background: #f8fbfb;
@@ -1369,7 +1371,7 @@ details[open] > summary .summary-caret {
 }
 
 .stage-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 760;
   color: var(--ink);
 }
@@ -1388,7 +1390,7 @@ details[open] > summary .summary-caret {
 }
 
 .empty {
-  padding: 14px;
+  padding: 12px;
   border: 1px dashed var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.62);
@@ -1406,7 +1408,7 @@ details[open] > summary .summary-caret {
 .config-view {
   height: calc(100vh - var(--topbar-height));
   min-height: 0;
-  padding: 16px;
+  padding: 14px;
   overflow: hidden;
 }
 
@@ -1428,7 +1430,7 @@ details[open] > summary .summary-caret {
 }
 
 .config-top h2 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
 }
 
@@ -1436,13 +1438,13 @@ details[open] > summary .summary-caret {
 .config-panel p,
 .path-note {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .config-workbench {
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: 184px minmax(0, 1fr);
+  gap: 14px;
   height: calc(100% - 82px);
   min-height: 0;
 }
@@ -1460,7 +1462,7 @@ details[open] > summary .summary-caret {
   display: grid;
   align-content: start;
   gap: 8px;
-  padding: 12px;
+  padding: 10px;
   background:
     linear-gradient(180deg, rgba(19, 34, 41, 0.03), transparent 58%),
     #fff;
@@ -1487,7 +1489,7 @@ details[open] > summary .summary-caret {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 12px;
-  padding: 16px;
+  padding: 14px;
   overflow: hidden;
 }
 
@@ -1499,7 +1501,7 @@ details[open] > summary .summary-caret {
 }
 
 .config-panel-head h3 {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .config-actions {
@@ -1513,18 +1515,18 @@ details[open] > summary .summary-caret {
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) auto;
   align-items: end;
-  gap: 10px;
+  gap: 8px;
 }
 
 .path-note {
-  min-height: 36px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface-quiet);
-  padding: 8px 10px;
+  padding: 7px 9px;
   white-space: nowrap;
   text-overflow: ellipsis;
   box-shadow: var(--shadow-inset);
@@ -1538,7 +1540,7 @@ details[open] > summary .summary-caret {
 }
 
 .file-tab {
-  min-height: 32px;
+  min-height: 28px;
   border: 1px solid var(--border);
   background: #fff;
   color: var(--text);
@@ -1605,7 +1607,7 @@ details[open] > summary .summary-caret {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
   overflow: auto;
   padding-right: 4px;
 }
