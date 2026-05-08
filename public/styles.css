@@ -308,7 +308,7 @@ textarea:focus {
 }
 
 .sidebar {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .inspector {
@@ -330,6 +330,7 @@ textarea:focus {
   border-bottom: 0;
 }
 
+.rooms-section,
 .agents-section,
 .task-flow-section {
   display: grid;
@@ -385,6 +386,7 @@ textarea:focus {
   gap: 8px;
 }
 
+#roomsList,
 #agentsList,
 #tasksList {
   height: 100%;
@@ -397,19 +399,26 @@ textarea:focus {
   scrollbar-color: #aab5af transparent;
 }
 
-#agentsList {
-  display: block;
-  max-height: clamp(300px, calc(100vh - 292px), 680px);
-}
-
+#roomsList,
 #agentsList > * + * {
   margin-top: 8px;
 }
 
+#roomsList {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  margin-top: 0;
+}
+
+#agentsList {
+  display: block;
+}
+
 .item {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 11px;
+  border-radius: 8px;
+  padding: 8px 9px;
   background: var(--surface-raised);
   box-shadow: var(--shadow-inset);
   transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
@@ -463,17 +472,32 @@ summary::-webkit-details-marker {
 
 .item-title {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   font-weight: 760;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.item-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .item-title button {
-  min-height: 28px;
-  padding: 0 9px;
+  min-height: 24px;
+  padding: 0 8px;
   font-size: 12px;
+}
+
+.item .meta {
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-card {
@@ -1286,6 +1310,7 @@ details[open] > summary .summary-caret {
 }
 
 #agentsList::-webkit-scrollbar,
+#roomsList::-webkit-scrollbar,
 #tasksList::-webkit-scrollbar,
 .task-stage-scroll::-webkit-scrollbar,
 .events-feed::-webkit-scrollbar,
@@ -1297,6 +1322,7 @@ details[open] > summary .summary-caret {
 }
 
 #agentsList::-webkit-scrollbar-thumb,
+#roomsList::-webkit-scrollbar-thumb,
 #tasksList::-webkit-scrollbar-thumb,
 .task-stage-scroll::-webkit-scrollbar-thumb,
 .events-feed::-webkit-scrollbar-thumb,
@@ -1310,6 +1336,7 @@ details[open] > summary .summary-caret {
 }
 
 #agentsList::-webkit-scrollbar-track,
+#roomsList::-webkit-scrollbar-track,
 #tasksList::-webkit-scrollbar-track,
 .task-stage-scroll::-webkit-scrollbar-track,
 .events-feed::-webkit-scrollbar-track,
@@ -1612,6 +1639,7 @@ details[open] > summary .summary-caret {
     overflow: visible;
   }
 
+  #roomsList,
   #agentsList,
   #tasksList {
     max-height: 360px;
