@@ -1103,7 +1103,7 @@ function renderMemberGraph(room) {
 
 function renderMemberGraphNode(member, { kind, active, dim }) {
   const label = member.name || member.agentId;
-  const badge = kind === "supervisor" ? "CORE ENGINE" : "AGENT";
+  const badge = kind === "supervisor" ? "总控 Agent" : "子 Agent";
   const subtitle = kind === "supervisor"
     ? "解析 · 分发 · 验收"
     : compactMemberCapabilities(member);

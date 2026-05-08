@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>实施设计 Agent 协作驾驶舱</title>
-    <link rel="stylesheet" href="/styles.css?v=20260508-topology-card-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260508-topology-side-1" />
   </head>
   <body>
     <div class="shell">
@@ -49,7 +49,6 @@
               <h2 id="activeRoomName">未选择协作室</h2>
               <p id="activeRoomPolicy">协作策略</p>
             </div>
-            <div id="memberChips" class="chips"></div>
           </div>
 
           <div id="eventsFeed" class="events-feed"></div>
@@ -80,6 +79,13 @@
               <h2>任务流</h2>
             </div>
             <div id="tasksList" class="task-list"></div>
+          </section>
+
+          <section class="section topology-section">
+            <div class="section-header">
+              <h2>协作拓扑</h2>
+            </div>
+            <div id="memberChips" class="topology-canvas"></div>
           </section>
         </aside>
       </main>
@@ -188,6 +194,6 @@
         </div>
       </section>
     </div>
-    <script type="module" src="/app.js?v=20260508-topology-card-1"></script>
+    <script type="module" src="/app.js?v=20260508-topology-side-1"></script>
   </body>
 </html>
