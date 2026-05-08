@@ -144,7 +144,10 @@ els.saveTokenButton.addEventListener("click", () => {
 });
 
 window.addEventListener("resize", () => {
-  window.requestAnimationFrame(drawMemberGraphLines);
+  window.requestAnimationFrame(() => {
+    fitMemberGraphRows();
+    drawMemberGraphLines();
+  });
 });
 
 els.refreshAgentsButton.addEventListener("click", () => {
@@ -645,8 +648,24 @@ function renderAgents() {
       </div>
       <div class="profile-editor" data-profile-agent="${escapeHtml(agent.id)}">
         <div class="profile-inputs">
-          <input data-profile-roles="${escapeHtml(agent.id)}" value="${escapeHtml((agent.roles || []).join(", "))}" placeholder="roles" />
-          <input data-profile-capabilities="${escapeHtml(agent.id)}" value="${escapeHtml((agent.capabilities || []).join(", "))}" placeholder="capabilities" />
+          <label class="profile-field">
+            <span>协作角色</span>
+            <input
+              data-profile-roles="${escapeHtml(agent.id)}"
+              value="${escapeHtml((agent.roles || []).join(", "))}"
+              placeholder="例如 supervisor, specialist, reviewer"
+              title="协作角色：用于判断总控、规划、执行、审核等协作身份"
+            />
+          </label>
+          <label class="profile-field">
+            <span>专业能力</span>
+            <input
+              data-profile-capabilities="${escapeHtml(agent.id)}"
+              value="${escapeHtml((agent.capabilities || []).join(", "))}"
+              placeholder="例如 dimension, form, permission"
+              title="专业能力：用于描述 agent 擅长的业务或技术领域"
+            />
+          </label>
         </div>
         <div class="preset-row">
           ${PROFILE_PRESETS.map((preset) => `<button type="button" class="preset-button" data-preset-agent="${escapeHtml(agent.id)}" data-preset-key="${escapeHtml(preset.key)}">${escapeHtml(preset.label)}</button>`).join("")}
@@ -757,7 +776,10 @@ function renderActiveRoom() {
     ? `${policyLabel(mode)} · Supervisor 拆题 · ${room.policy?.requireReview ? "最终审核开启" : "最终审核关闭"}`
     : `${policyLabel(mode)} · ${room.policy?.requireReview ? "审核开启" : "审核关闭"} · max ${room.policy?.maxParallel || 1}`;
   els.memberChips.innerHTML = renderMemberGraph(room);
-  window.requestAnimationFrame(drawMemberGraphLines);
+  window.requestAnimationFrame(() => {
+    fitMemberGraphRows();
+    drawMemberGraphLines();
+  });
   const current = activeTask();
   els.taskForm.querySelector("button").disabled = !room.members?.length || Boolean(current);
   els.chatForm.querySelector("button").disabled = false;
@@ -802,15 +824,7 @@ function renderTasks() {
       <div class="task-stage-scroll">
         <div class="stage-list">
           ${(task.stages || []).map((stage) => `
-            <div class="stage">
-              <div class="stage-row">
-                <span class="stage-name">${escapeHtml(stage.title)}</span>
-                <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(statusLabel(stage.status))}</span>
-              </div>
-              <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
-              ${stage.reason ? `<div class="stage-note">${escapeHtml(stage.reason)}</div>` : ""}
-              ${stage.result?.summary ? `<div class="stage-result">${escapeHtml(truncate(stage.result.summary, 220))}</div>` : ""}
-            </div>
+            ${renderTaskStage(stage)}
           `).join("")}
         </div>
       </div>
@@ -818,6 +832,25 @@ function renderTasks() {
   `;
   }).join("");
   bindTaskToggles();
+}
+
+function renderTaskStage(stage) {
+  const detailOpen = ["running", "failed"].includes(stage.status);
+  return `
+    <details class="stage" ${detailOpen ? "open" : ""}>
+      <summary class="stage-summary">
+        <div class="stage-row">
+          <span class="stage-name">${escapeHtml(stage.title)}</span>
+          <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(statusLabel(stage.status))}</span>
+        </div>
+        <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
+      </summary>
+      <div class="stage-detail-body">
+        ${stage.reason ? `<div class="stage-note">${escapeHtml(stage.reason)}</div>` : ""}
+        ${stage.result?.summary ? `<div class="stage-result">${escapeHtml(truncate(stage.result.summary, 180))}</div>` : ""}
+      </div>
+    </details>
+  `;
 }
 
 function renderConfigView() {
@@ -1077,7 +1110,7 @@ function renderMemberGraph(room) {
   const dimOthers = Boolean(activeAgentId);
 
   return `
-    <div class="member-graph" data-active-agent="${escapeHtml(activeAgentId)}" data-supervisor-agent="${escapeHtml(supervisor.agentId)}">
+    <div class="member-graph" data-active-agent="${escapeHtml(activeAgentId)}" data-supervisor-agent="${escapeHtml(supervisor.agentId)}" data-specialist-count="${escapeHtml(String(specialists.length))}">
       <svg class="member-graph-lines" aria-hidden="true"></svg>
       <div class="member-row supervisor-row">
         <span class="member-node-label">Supervisor</span>
@@ -1104,9 +1137,7 @@ function renderMemberGraph(room) {
 function renderMemberGraphNode(member, { kind, active, dim }) {
   const label = member.name || member.agentId;
   const badge = kind === "supervisor" ? "总控 Agent" : "子 Agent";
-  const subtitle = kind === "supervisor"
-    ? "解析 · 分发 · 验收"
-    : compactMemberCapabilities(member);
+  const subtitle = compactMemberCapabilities(member);
   return `
     <span
       class="member-node ${escapeHtml(kind)} ${active ? "active" : ""} ${dim ? "dim" : ""}"
@@ -1121,11 +1152,29 @@ function renderMemberGraphNode(member, { kind, active, dim }) {
 }
 
 function compactMemberCapabilities(member) {
-  const tags = [
-    ...(member.capabilities || []),
-    ...(member.roles || [])
-  ].filter((tag) => !["specialist", "domain"].includes(String(tag).toLowerCase()));
-  return tags.slice(0, 3).join(" · ") || "协作执行";
+  const tags = (member.capabilities || [])
+    .filter((tag) => !["specialist", "domain"].includes(String(tag).toLowerCase()));
+  return tags.slice(0, 3).join(" · ") || "未设置专业能力";
+}
+
+function fitMemberGraphRows() {
+  const graph = els.memberChips.querySelector(".member-graph");
+  const specialistRow = graph?.querySelector(".specialist-row");
+  if (!graph || !specialistRow) {
+    return;
+  }
+
+  graph.style.setProperty("--graph-scale", "1");
+
+  const availableWidth = Math.max(80, graph.clientWidth - 20);
+  const rawWidth = specialistRow.scrollWidth;
+  const specialistCount = Math.max(1, Number(graph.dataset.specialistCount || 1));
+  const estimatedWidth = specialistCount * 108 + Math.max(0, specialistCount - 1) * 7;
+  const actualRatio = rawWidth > 0 ? availableWidth / rawWidth : 1;
+  const estimatedRatio = availableWidth / estimatedWidth;
+  const scale = Math.max(0.46, Math.min(1, actualRatio, estimatedRatio));
+
+  graph.style.setProperty("--graph-scale", scale.toFixed(3));
 }
 
 function drawMemberGraphLines() {
@@ -1171,13 +1220,19 @@ function findSupervisorMember(members) {
 }
 
 function isSupervisorMember(member) {
-  const raw = [
-    member.agentId,
-    member.name,
-    ...(member.roles || []),
-    ...(member.capabilities || [])
-  ].filter(Boolean).join(" ").toLowerCase();
-  return raw.includes("supervisor") || raw.includes("总控");
+  return (member.roles || []).some((role) => isSupervisorRole(role));
+}
+
+function isSupervisorRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  return [
+    "supervisor",
+    "leader",
+    "coordinator",
+    "总控",
+    "主控",
+    "中枢"
+  ].some((keyword) => normalized === keyword || normalized.includes(keyword));
 }
 
 function runningStageForActiveTask() {

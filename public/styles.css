@@ -691,6 +691,7 @@ details[open] > summary .summary-caret {
   padding: 10px;
   border: 1px solid #d8e4eb;
   border-radius: 8px;
+  overflow: hidden;
   background:
     linear-gradient(90deg, rgba(47, 95, 188, 0.035) 1px, transparent 1px),
     linear-gradient(180deg, rgba(47, 95, 188, 0.035) 1px, transparent 1px);
@@ -756,11 +757,16 @@ details[open] > summary .summary-caret {
   z-index: 2;
   display: flex;
   justify-content: center;
-  gap: 9px;
+  gap: 7px;
 }
 
 .specialist-row {
-  flex-wrap: wrap;
+  width: max-content;
+  max-width: none;
+  justify-self: center;
+  flex-wrap: nowrap;
+  transform: scale(var(--graph-scale, 1));
+  transform-origin: center center;
 }
 
 .member-node-label {
@@ -768,7 +774,7 @@ details[open] > summary .summary-caret {
 }
 
 .member-node {
-  width: clamp(104px, 8.8vw, 132px);
+  width: clamp(82px, 7.2vw, 108px);
   min-height: 54px;
   display: inline-grid;
   grid-template-rows: auto auto auto;
@@ -789,7 +795,7 @@ details[open] > summary .summary-caret {
 }
 
 .member-node.supervisor {
-  width: clamp(136px, 11.5vw, 168px);
+  width: clamp(124px, 10.5vw, 152px);
   min-height: 60px;
   border-color: #bdcbd4;
   background: #fff;
@@ -805,7 +811,7 @@ details[open] > summary .summary-caret {
   background: #eef4ff;
   color: #2f63df;
   padding: 2px 7px;
-  font-size: 10px;
+  font-size: calc(10px * var(--graph-scale, 1));
   font-weight: 850;
   letter-spacing: 0;
 }
@@ -819,7 +825,7 @@ details[open] > summary .summary-caret {
   max-width: 100%;
   overflow: hidden;
   color: var(--ink);
-  font-size: 12px;
+  font-size: calc(12px * var(--graph-scale, 1));
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -830,7 +836,7 @@ details[open] > summary .summary-caret {
   margin-top: 3px;
   overflow: hidden;
   color: #60717a;
-  font-size: 11px;
+  font-size: calc(11px * var(--graph-scale, 1));
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -896,10 +902,21 @@ details[open] > summary .summary-caret {
 
 .profile-inputs {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
-.profile-inputs input {
+.profile-field {
+  display: grid;
+  gap: 4px;
+}
+
+.profile-field span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.profile-field input {
   min-height: 32px;
   padding: 7px 8px;
   font-size: 12px;
@@ -1378,6 +1395,7 @@ details[open] > summary .summary-caret {
   display: grid;
   gap: 9px;
   align-content: start;
+  min-height: 0;
 }
 
 .task-card {
@@ -1402,7 +1420,7 @@ details[open] > summary .summary-caret {
 }
 
 .task-stage-scroll {
-  max-height: clamp(220px, calc(100vh - 360px), 460px);
+  max-height: clamp(110px, 20vh, 190px);
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -1455,11 +1473,25 @@ details[open] > summary .summary-caret {
 
 .stage {
   display: grid;
-  gap: 4px;
   padding: 8px;
   border: 1px solid #dce6ea;
   border-radius: 8px;
   background: #f8fbfb;
+}
+
+.stage[open] {
+  background: #fff;
+}
+
+.stage-summary {
+  display: grid;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.stage[open] .stage-summary {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
 }
 
 .stage-row {
@@ -1482,9 +1514,13 @@ details[open] > summary .summary-caret {
   line-height: 1.45;
 }
 
+.stage-detail-body {
+  display: grid;
+  gap: 6px;
+  padding-top: 6px;
+}
+
 .stage-result {
-  padding-top: 7px;
-  border-top: 1px solid var(--border);
   white-space: pre-wrap;
 }
 

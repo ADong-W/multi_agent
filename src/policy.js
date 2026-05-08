@@ -250,22 +250,20 @@ function findByRoleOrCapability(members, tags) {
 
 export function findSupervisorMember(members = []) {
   return members.find((member) => {
-    const values = [
-      member.agentId,
-      member.name,
-      ...(member.roles || []),
-      ...(member.capabilities || [])
-    ].filter(Boolean).map((item) => String(item).toLowerCase());
-    return values.some((value) => (
-      value.includes("supervisor")
-      || value.includes("leader")
-      || value.includes("coordinator")
-      || value.includes("planner")
-      || value.includes("中枢")
-      || value.includes("总控")
-      || value.includes("主控")
-    ));
-  }) || members.find((member) => member.agentId === "agent_1") || members[0] || null;
+    return (member.roles || []).some((role) => isSupervisorRole(role));
+  }) || members[0] || null;
+}
+
+function isSupervisorRole(role) {
+  const normalized = String(role || "").trim().toLowerCase();
+  return [
+    "supervisor",
+    "leader",
+    "coordinator",
+    "中枢",
+    "总控",
+    "主控"
+  ].some((keyword) => normalized === keyword || normalized.includes(keyword));
 }
 
 function findNonSupervisorMember(members, index) {
