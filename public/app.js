@@ -539,6 +539,14 @@ function isMatchingMessage(left, right) {
 
 function setConnection(text) {
   els.connectionStatus.textContent = text;
+  const normalized = String(text || "").toLowerCase();
+  els.connectionStatus.classList.toggle("connected", normalized === "connected");
+  els.connectionStatus.classList.toggle("reconnecting", normalized === "reconnecting");
+  els.connectionStatus.classList.toggle("disconnected", normalized === "disconnected");
+  els.connectionStatus.classList.toggle(
+    "error",
+    Boolean(text) && !["connected", "reconnecting", "disconnected"].includes(normalized)
+  );
 }
 
 function render() {

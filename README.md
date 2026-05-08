@@ -1,5 +1,7 @@
 # OpenClaw TeamRoom
 
+中文说明请见 [README-CN.md](README-CN.md)。
+
 OpenClaw TeamRoom is a lightweight multi-agent collaboration cockpit for OpenClaw-style agent workspaces. It is not the domain agent itself and not a full chat product. It sits above a Supervisor agent and specialist agents so users can create a room, add agents, publish a task, observe dispatch, watch specialist execution, and review the final handoff.
 
 The project is intentionally small for company intranet deployment:
@@ -51,6 +53,48 @@ The default mock adapter exposes four demo agents:
 - frontend-agent
 - backend-agent
 - reviewer-agent
+
+## Connect To Your Local OpenClaw
+
+If you already have OpenClaw running locally and want TeamRoom to use your existing OpenClaw agents, start TeamRoom with the OpenClaw Gateway adapter.
+
+1. Enter this project directory:
+
+```bash
+cd xxx/multi_agent
+```
+
+2. Start TeamRoom with your own port, OpenClaw address, and OpenClaw token:
+
+```bash
+TEAMROOM_PORT=<choose-a-4-digit-port-for-teamroom> \
+TEAMROOM_ADAPTER=openclaw-gateway \
+OPENCLAW_BASE_URL=<your-openclaw-url> \
+OPENCLAW_TOKEN='<your-openclaw-token>' \
+npm start
+```
+
+Example:
+
+```bash
+TEAMROOM_PORT=8786 \
+TEAMROOM_ADAPTER=openclaw-gateway \
+OPENCLAW_BASE_URL=http://127.0.0.1:18789 \
+OPENCLAW_TOKEN='replace-with-your-token' \
+npm start
+```
+
+Then open:
+
+```text
+http://127.0.0.1:<your-teamroom-port>
+```
+
+For example, if `TEAMROOM_PORT=8786`, open:
+
+```text
+http://127.0.0.1:8786
+```
 
 ## OpenClaw Integration Shape
 

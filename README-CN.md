@@ -52,6 +52,48 @@ http://127.0.0.1:8787
 - backend-agent
 - reviewer-agent
 
+## 连接你本地的 OpenClaw
+
+如果你本地已经启动了 OpenClaw，并希望 TeamRoom 直接使用 OpenClaw 里现有的 agents，可以用 OpenClaw Gateway adapter 启动。
+
+1. 先进入项目文件夹：
+
+```bash
+cd xxx/multi_agent
+```
+
+2. 执行下列命令，把端口、OpenClaw 地址和 OpenClaw token 换成你自己的：
+
+```bash
+TEAMROOM_PORT=<你自己设置一个4位数的端口用于给当前项目使用> \
+TEAMROOM_ADAPTER=openclaw-gateway \
+OPENCLAW_BASE_URL=<你的openclaw地址> \
+OPENCLAW_TOKEN='<你的openclaw的token>' \
+npm start
+```
+
+示例：
+
+```bash
+TEAMROOM_PORT=8786 \
+TEAMROOM_ADAPTER=openclaw-gateway \
+OPENCLAW_BASE_URL=http://127.0.0.1:18789 \
+OPENCLAW_TOKEN='替换成你的token' \
+npm start
+```
+
+启动成功后，打开：
+
+```text
+http://127.0.0.1:<你设置的端口>
+```
+
+比如你设置的是 `TEAMROOM_PORT=8786`，就打开：
+
+```text
+http://127.0.0.1:8786
+```
+
 ## OpenClaw 集成方式
 
 实现里保留了一个很窄的 adapter 边界：
