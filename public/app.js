@@ -561,6 +561,7 @@ function render() {
 }
 
 function renderRooms() {
+  const previousScrollTop = els.roomsList.scrollTop;
   if (!state.rooms.length) {
     els.roomsList.innerHTML = `<div class="empty">暂无协作室</div>`;
     return;
@@ -574,6 +575,7 @@ function renderRooms() {
       <div class="meta">${escapeHtml(policyLabel(room.policy?.mode || "supervisor"))} · ${room.members?.length || 0} agents</div>
     </div>
   `).join("");
+  els.roomsList.scrollTop = previousScrollTop;
 
   els.roomsList.querySelectorAll("[data-room-id]").forEach((item) => {
     const activate = async () => {
