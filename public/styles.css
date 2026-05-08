@@ -401,20 +401,18 @@ textarea:focus {
   scrollbar-color: #aab5af transparent;
 }
 
-#roomsList,
-#agentsList > * + * {
-  margin-top: 7px;
-}
-
 #roomsList {
-  display: grid;
-  align-content: start;
-  gap: 7px;
+  display: block;
   margin-top: 0;
 }
 
 #agentsList {
   display: block;
+}
+
+#roomsList > * + *,
+#agentsList > * + * {
+  margin-top: 7px;
 }
 
 .item {
