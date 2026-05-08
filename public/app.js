@@ -1080,6 +1080,7 @@ function renderMemberGraph(room) {
     <div class="member-graph" data-active-agent="${escapeHtml(activeAgentId)}" data-supervisor-agent="${escapeHtml(supervisor.agentId)}">
       <svg class="member-graph-lines" aria-hidden="true"></svg>
       <div class="member-row supervisor-row">
+        <span class="member-node-label">Supervisor</span>
         ${renderMemberGraphNode(supervisor, {
           kind: "supervisor",
           active: activeAgentId === supervisor.agentId,
@@ -1087,6 +1088,7 @@ function renderMemberGraph(room) {
         })}
       </div>
       <div class="member-row specialist-row">
+        <span class="member-node-label">Agents</span>
         ${specialists.length
           ? specialists.map((member) => renderMemberGraphNode(member, {
             kind: "specialist",
@@ -1141,13 +1143,11 @@ function drawMemberGraphLines() {
     const y2 = rect.top - graphRect.top + 1;
     const agentId = node.dataset.memberNode;
     const active = activeAgentId && activeAgentId !== supervisorAgentId && activeAgentId === agentId;
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    line.setAttribute("x1", x1);
-    line.setAttribute("y1", y1);
-    line.setAttribute("x2", x2);
-    line.setAttribute("y2", y2);
-    line.setAttribute("class", `member-graph-line ${active ? "active" : ""}`);
-    svg.appendChild(line);
+    const midY = y1 + Math.max(10, (y2 - y1) * 0.45);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
+    path.setAttribute("class", `member-graph-line ${active ? "active" : ""}`);
+    svg.appendChild(path);
   }
 }
 

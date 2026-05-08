@@ -676,18 +676,12 @@ details[open] > summary .summary-caret {
 
 .member-graph {
   position: relative;
-  min-height: 76px;
+  min-height: 70px;
   display: grid;
   grid-template-rows: auto auto;
-  gap: 15px;
-  padding: 5px 8px 4px;
-  border: 1px solid rgba(205, 217, 222, 0.72);
-  border-radius: 9px;
-  background:
-    linear-gradient(90deg, rgba(47, 95, 188, 0.05) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(47, 95, 188, 0.05) 1px, transparent 1px),
-    rgba(255, 255, 255, 0.62);
-  background-size: 18px 18px;
+  gap: 12px;
+  padding: 4px 0 2px;
+  background: transparent;
 }
 
 .member-graph.empty-graph {
@@ -710,15 +704,18 @@ details[open] > summary .summary-caret {
 }
 
 .member-graph-line {
-  stroke: #aebec5;
-  stroke-width: 2;
+  fill: none;
+  stroke: #c3d0d6;
+  stroke-width: 1.5;
   stroke-linecap: round;
+  stroke-dasharray: 4 4;
   transition: stroke 0.16s ease, stroke-width 0.16s ease, opacity 0.16s ease;
 }
 
 .member-graph-line.active {
   stroke: var(--accent);
-  stroke-width: 3;
+  stroke-width: 2.4;
+  stroke-dasharray: none;
   filter: drop-shadow(0 2px 3px rgba(12, 124, 114, 0.2));
 }
 
@@ -727,25 +724,36 @@ details[open] > summary .summary-caret {
   z-index: 1;
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .specialist-row {
   flex-wrap: wrap;
 }
 
+.member-node-label {
+  align-self: center;
+  color: #7b8a92;
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .member-node {
-  max-width: 156px;
+  max-width: 150px;
   min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: #f8fbfb;
-  color: var(--muted);
-  padding: 3px 9px;
+  border: 1px solid #cfdbe0;
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.7), transparent),
+    #f7fafb;
+  color: #52646d;
+  padding: 3px 10px;
   font-size: 11px;
   font-weight: 650;
   line-height: 1.2;
@@ -755,17 +763,19 @@ details[open] > summary .summary-caret {
 }
 
 .member-node.supervisor {
-  border-color: #9bd2cb;
-  background: #dff2ef;
+  border-color: #7fc9bf;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), transparent),
+    #d7f1ed;
   color: var(--accent-strong);
-  box-shadow: 0 5px 12px rgba(15, 118, 110, 0.08);
+  box-shadow: 0 4px 10px rgba(12, 124, 114, 0.1);
 }
 
 .member-node.active {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 0 0 4px rgba(12, 124, 114, 0.13), 0 8px 18px rgba(12, 124, 114, 0.18);
+  box-shadow: 0 0 0 3px rgba(12, 124, 114, 0.13), 0 7px 16px rgba(12, 124, 114, 0.18);
   transform: translateY(-1px);
 }
 
