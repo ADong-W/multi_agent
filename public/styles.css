@@ -314,15 +314,15 @@ textarea:focus {
 }
 
 .inspector {
-  grid-template-rows: minmax(190px, 0.9fr) minmax(280px, 1.3fr) minmax(190px, 0.9fr);
+  grid-template-rows: minmax(214px, max-content) minmax(0, 1fr) minmax(236px, 28vh);
 }
 
 .inspector.task-flow-dense {
-  grid-template-rows: minmax(170px, 0.72fr) minmax(360px, 1.72fr) minmax(170px, 0.72fr);
+  grid-template-rows: minmax(214px, max-content) minmax(0, 1fr) minmax(236px, 28vh);
 }
 
 .inspector.task-flow-expanded {
-  grid-template-rows: minmax(170px, 0.68fr) minmax(410px, 1.9fr) minmax(160px, 0.64fr);
+  grid-template-rows: minmax(214px, max-content) minmax(0, 1fr) minmax(236px, 28vh);
 }
 
 .section {
@@ -351,7 +351,7 @@ textarea:focus {
 
 .task-control-section {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   overflow: hidden;
 }
 
@@ -432,6 +432,7 @@ textarea:focus {
   overflow-x: hidden;
   overflow-y: auto;
   padding-right: 4px;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #aab5af transparent;
@@ -1058,6 +1059,7 @@ details[open] > summary .summary-caret {
   display: grid;
   gap: 3px;
   margin-bottom: 10px;
+  min-height: 36px;
   padding: 8px 9px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1072,6 +1074,19 @@ details[open] > summary .summary-caret {
 
 .active-task-status strong {
   color: var(--accent-strong);
+}
+
+.task-control-section .stack {
+  margin-bottom: 0;
+}
+
+.task-control-section textarea {
+  min-height: 74px;
+  max-height: 116px;
+}
+
+.task-control-section .split button {
+  min-height: 36px;
 }
 
 .config-form {
@@ -1824,15 +1839,30 @@ details[open] > summary .summary-caret {
 
 @media (max-height: 820px) {
   .inspector {
-    grid-template-rows: minmax(138px, 0.8fr) minmax(220px, 1.28fr) minmax(170px, 0.86fr);
+    grid-template-rows: minmax(190px, max-content) minmax(0, 1fr) minmax(206px, 26vh);
   }
 
   .inspector.task-flow-dense {
-    grid-template-rows: minmax(128px, 0.6fr) minmax(300px, 1.74fr) minmax(146px, 0.66fr);
+    grid-template-rows: minmax(190px, max-content) minmax(0, 1fr) minmax(206px, 26vh);
   }
 
   .inspector.task-flow-expanded {
-    grid-template-rows: minmax(128px, 0.55fr) minmax(330px, 1.92fr) minmax(132px, 0.55fr);
+    grid-template-rows: minmax(190px, max-content) minmax(0, 1fr) minmax(206px, 26vh);
+  }
+
+  .active-task-status {
+    margin-bottom: 8px;
+    min-height: 32px;
+    padding: 7px 8px;
+  }
+
+  .task-control-section textarea {
+    min-height: 56px;
+    max-height: 92px;
+  }
+
+  .task-control-section .split button {
+    min-height: 32px;
   }
 
   .task-stage-scroll {
