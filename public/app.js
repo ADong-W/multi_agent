@@ -627,20 +627,21 @@ function renderAgents() {
     return;
   }
   const memberIds = new Set((state.activeRoom?.members || []).map((member) => member.agentId));
-  els.agentsList.innerHTML = state.agents.map((agent) => `
+  els.agentsList.innerHTML = state.agents.map((agent) => {
+    const isMember = memberIds.has(agent.id);
+    return `
     <article class="agent-card ${state.expandedAgents.has(agent.id) ? "expanded" : ""}" data-agent-card="${escapeHtml(agent.id)}">
       <div class="agent-summary" data-agent-toggle="${escapeHtml(agent.id)}" role="button" tabindex="0" aria-expanded="${state.expandedAgents.has(agent.id) ? "true" : "false"}">
         <span class="summary-caret" aria-hidden="true">›</span>
         <span class="agent-summary-main">
           <span class="agent-name">${escapeHtml(agent.name || agent.id)}</span>
         </span>
-        <span class="status-pill ${memberIds.has(agent.id) ? "completed" : ""}">${memberIds.has(agent.id) ? "已在室" : "可加入"}</span>
         <button
           type="button"
-          class="agent-add-button"
+          class="agent-add-button ${isMember ? "is-member" : ""}"
           data-add-agent="${escapeHtml(agent.id)}"
-          ${!state.activeRoomId || memberIds.has(agent.id) ? "disabled" : ""}
-        >${memberIds.has(agent.id) ? "已加入" : "拉入"}</button>
+          ${!state.activeRoomId || isMember ? "disabled" : ""}
+        >${isMember ? "在室" : "拉入"}</button>
       </div>
       <div class="agent-body">
         <div class="meta">${escapeHtml(agent.id)} · ${agent.profileSource === "local" ? "本地标签" : "OpenClaw 推断"}</div>
@@ -676,7 +677,8 @@ function renderAgents() {
         </div>
       </div>
     </article>
-  `).join("");
+  `;
+  }).join("");
 
   bindAgentToggles();
 
@@ -805,10 +807,13 @@ function renderEvents() {
 
 function renderTasks() {
   if (!state.tasks.length) {
+    updateInspectorTaskLayout(false, false);
     els.tasksList.innerHTML = `<div class="empty">暂无任务</div>`;
     return;
   }
   const current = activeTask();
+  const hasOpenTask = state.tasks.some((task) => state.expandedTasks.has(task.id) || task.id === current?.id);
+  updateInspectorTaskLayout(hasOpenTask, state.tasks.length > 4);
   els.tasksList.innerHTML = state.tasks.map((task) => {
     const open = state.expandedTasks.has(task.id) || task.id === current?.id;
     return `
@@ -832,6 +837,15 @@ function renderTasks() {
   `;
   }).join("");
   bindTaskToggles();
+}
+
+function updateInspectorTaskLayout(hasOpenTask, hasManyTasks) {
+  const inspector = els.tasksList?.closest(".inspector");
+  if (!inspector) {
+    return;
+  }
+  inspector.classList.toggle("task-flow-expanded", Boolean(hasOpenTask));
+  inspector.classList.toggle("task-flow-dense", Boolean(hasManyTasks));
 }
 
 function renderTaskStage(stage) {
@@ -1159,22 +1173,27 @@ function compactMemberCapabilities(member) {
 
 function fitMemberGraphRows() {
   const graph = els.memberChips.querySelector(".member-graph");
-  const specialistRow = graph?.querySelector(".specialist-row");
-  if (!graph || !specialistRow) {
+  if (!graph) {
     return;
   }
 
-  graph.style.setProperty("--graph-scale", "1");
-
   const availableWidth = Math.max(80, graph.clientWidth - 20);
-  const rawWidth = specialistRow.scrollWidth;
   const specialistCount = Math.max(1, Number(graph.dataset.specialistCount || 1));
   const estimatedWidth = specialistCount * 108 + Math.max(0, specialistCount - 1) * 7;
-  const actualRatio = rawWidth > 0 ? availableWidth / rawWidth : 1;
   const estimatedRatio = availableWidth / estimatedWidth;
-  const scale = Math.max(0.46, Math.min(1, actualRatio, estimatedRatio));
+  const scale = Math.max(0.36, Math.min(1, estimatedRatio));
 
   graph.style.setProperty("--graph-scale", scale.toFixed(3));
+  graph.style.setProperty("--graph-node-width", `${Math.round(108 * scale)}px`);
+  graph.style.setProperty("--graph-node-height", `${Math.round(54 * scale)}px`);
+  graph.style.setProperty("--graph-supervisor-width", `${Math.round(152 * scale)}px`);
+  graph.style.setProperty("--graph-supervisor-height", `${Math.round(60 * scale)}px`);
+  graph.style.setProperty("--graph-node-gap", `${Math.max(3, Math.round(7 * scale))}px`);
+  graph.style.setProperty("--graph-node-pad-y", `${Math.max(3, Math.round(7 * scale))}px`);
+  graph.style.setProperty("--graph-node-pad-x", `${Math.max(4, Math.round(8 * scale))}px`);
+  graph.style.setProperty("--graph-badge-font", `${Math.max(7.5, 10 * scale).toFixed(1)}px`);
+  graph.style.setProperty("--graph-name-font", `${Math.max(8.5, 12 * scale).toFixed(1)}px`);
+  graph.style.setProperty("--graph-subtitle-font", `${Math.max(8, 11 * scale).toFixed(1)}px`);
 }
 
 function drawMemberGraphLines() {

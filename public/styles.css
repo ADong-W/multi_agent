@@ -314,7 +314,15 @@ textarea:focus {
 }
 
 .inspector {
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(190px, 0.9fr) minmax(280px, 1.3fr) minmax(190px, 0.9fr);
+}
+
+.inspector.task-flow-dense {
+  grid-template-rows: minmax(170px, 0.72fr) minmax(360px, 1.72fr) minmax(170px, 0.72fr);
+}
+
+.inspector.task-flow-expanded {
+  grid-template-rows: minmax(170px, 0.68fr) minmax(410px, 1.9fr) minmax(160px, 0.64fr);
 }
 
 .section {
@@ -515,9 +523,11 @@ summary::-webkit-details-marker {
 }
 
 .item-title button {
-  min-height: 20px;
-  padding: 0 6px;
-  font-size: 11px;
+  min-width: 44px;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 
 .item .meta {
@@ -556,7 +566,7 @@ summary::-webkit-details-marker {
 }
 
 .agent-summary {
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .task-summary {
@@ -682,12 +692,23 @@ details[open] > summary .summary-caret {
 
 .member-graph {
   position: relative;
+  --graph-scale: 1;
+  --graph-node-width: clamp(82px, 7.2vw, 108px);
+  --graph-node-height: 54px;
+  --graph-supervisor-width: clamp(124px, 10.5vw, 152px);
+  --graph-supervisor-height: 60px;
+  --graph-node-gap: 7px;
+  --graph-node-pad-y: 7px;
+  --graph-node-pad-x: 8px;
+  --graph-badge-font: 10px;
+  --graph-name-font: 12px;
+  --graph-subtitle-font: 11px;
   height: 100%;
   min-height: 0;
   display: grid;
   grid-template-rows: auto auto;
   align-content: center;
-  gap: clamp(12px, 2.4vh, 18px);
+  gap: clamp(10px, 2.1vh, 16px);
   padding: 10px;
   border: 1px solid #d8e4eb;
   border-radius: 8px;
@@ -757,16 +778,15 @@ details[open] > summary .summary-caret {
   z-index: 2;
   display: flex;
   justify-content: center;
-  gap: 7px;
+  gap: var(--graph-node-gap);
 }
 
 .specialist-row {
-  width: max-content;
-  max-width: none;
-  justify-self: center;
+  width: 100%;
+  max-width: 100%;
+  justify-self: stretch;
   flex-wrap: nowrap;
-  transform: scale(var(--graph-scale, 1));
-  transform-origin: center center;
+  overflow: visible;
 }
 
 .member-node-label {
@@ -774,8 +794,10 @@ details[open] > summary .summary-caret {
 }
 
 .member-node {
-  width: clamp(82px, 7.2vw, 108px);
-  min-height: 54px;
+  flex: 0 0 auto;
+  width: var(--graph-node-width);
+  min-width: 0;
+  min-height: var(--graph-node-height);
   display: inline-grid;
   grid-template-rows: auto auto auto;
   align-items: center;
@@ -785,8 +807,8 @@ details[open] > summary .summary-caret {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.92);
   color: #52646d;
-  padding: 7px 8px;
-  font-size: 11px;
+  padding: var(--graph-node-pad-y) var(--graph-node-pad-x);
+  font-size: var(--graph-subtitle-font);
   font-weight: 650;
   line-height: 1.25;
   text-align: center;
@@ -795,8 +817,8 @@ details[open] > summary .summary-caret {
 }
 
 .member-node.supervisor {
-  width: clamp(124px, 10.5vw, 152px);
-  min-height: 60px;
+  width: var(--graph-supervisor-width);
+  min-height: var(--graph-supervisor-height);
   border-color: #bdcbd4;
   background: #fff;
   color: var(--ink);
@@ -805,15 +827,19 @@ details[open] > summary .summary-caret {
 
 .member-node-badge {
   width: fit-content;
+  max-width: 100%;
   justify-self: center;
   margin-bottom: 4px;
+  overflow: hidden;
   border-radius: 3px;
   background: #eef4ff;
   color: #2f63df;
   padding: 2px 7px;
-  font-size: calc(10px * var(--graph-scale, 1));
+  font-size: var(--graph-badge-font);
   font-weight: 850;
   letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .member-node.supervisor .member-node-badge {
@@ -825,7 +851,7 @@ details[open] > summary .summary-caret {
   max-width: 100%;
   overflow: hidden;
   color: var(--ink);
-  font-size: calc(12px * var(--graph-scale, 1));
+  font-size: var(--graph-name-font);
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -836,7 +862,7 @@ details[open] > summary .summary-caret {
   margin-top: 3px;
   overflow: hidden;
   color: #60717a;
-  font-size: calc(11px * var(--graph-scale, 1));
+  font-size: var(--graph-subtitle-font);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -964,10 +990,37 @@ details[open] > summary .summary-caret {
 }
 
 .agent-add-button {
-  min-height: 28px;
+  min-width: 44px;
+  min-height: 26px;
   padding: 0 9px;
-  font-size: 11px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 760;
+  box-shadow: none;
   white-space: nowrap;
+}
+
+.agent-add-button:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  box-shadow: none;
+}
+
+.agent-add-button.is-member:disabled {
+  border-color: #b8efc8;
+  background: #e8f8ee;
+  color: #047857;
+  opacity: 1;
+}
+
+.agent-add-button:disabled:not(.is-member) {
+  border-color: #dde7ea;
+  background: #edf2f2;
+  color: #809099;
+  opacity: 1;
 }
 
 .chip.running,
@@ -1393,12 +1446,14 @@ details[open] > summary .summary-caret {
 
 .task-list {
   display: grid;
+  grid-auto-rows: max-content;
   gap: 9px;
   align-content: start;
   min-height: 0;
 }
 
 .task-card {
+  min-height: 42px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background:
@@ -1419,13 +1474,21 @@ details[open] > summary .summary-caret {
   background: #fff;
 }
 
+.task-card:not([open]) .task-summary {
+  min-height: 40px;
+}
+
 .task-stage-scroll {
-  max-height: clamp(110px, 20vh, 190px);
+  max-height: clamp(180px, 34vh, 360px);
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #aab5af transparent;
+}
+
+.task-card[open] .task-stage-scroll {
+  max-height: clamp(240px, 48vh, 520px);
 }
 
 #agentsList::-webkit-scrollbar,
@@ -1757,6 +1820,28 @@ details[open] > summary .summary-caret {
 
 .small-template-editor {
   height: 150px;
+}
+
+@media (max-height: 820px) {
+  .inspector {
+    grid-template-rows: minmax(138px, 0.8fr) minmax(220px, 1.28fr) minmax(170px, 0.86fr);
+  }
+
+  .inspector.task-flow-dense {
+    grid-template-rows: minmax(128px, 0.6fr) minmax(300px, 1.74fr) minmax(146px, 0.66fr);
+  }
+
+  .inspector.task-flow-expanded {
+    grid-template-rows: minmax(128px, 0.55fr) minmax(330px, 1.92fr) minmax(132px, 0.55fr);
+  }
+
+  .task-stage-scroll {
+    max-height: clamp(180px, 40vh, 320px);
+  }
+
+  .task-card[open] .task-stage-scroll {
+    max-height: clamp(220px, 52vh, 420px);
+  }
 }
 
 @media (max-width: 1080px) {
