@@ -6,6 +6,7 @@ const state = {
   activeRoom: null,
   tasks: [],
   events: [],
+  expandedRooms: new Set(),
   expandedAgents: new Set(),
   expandedMessages: new Set(),
   expandedTasks: new Set(),
@@ -39,6 +40,11 @@ const PROMPT_TEMPLATE_KEYS = [
   "roomContextItem",
   "taskMessageItem"
 ];
+
+const STAGE_TITLE_LABELS = {
+  "Supervisor Dispatch": "需求分析·任务拆解",
+  "Supervisor Review": "任务汇总审核"
+};
 
 const PROFILE_PRESETS = [
   {
@@ -576,24 +582,48 @@ function renderRooms() {
     els.roomsList.innerHTML = `<div class="empty">暂无协作室</div>`;
     return;
   }
-  els.roomsList.innerHTML = state.rooms.map((room) => `
-    <div class="item ${room.id === state.activeRoomId ? "active" : ""}" data-room-id="${escapeHtml(room.id)}" role="button" tabindex="0">
-      <div class="item-title">
-        <span>${escapeHtml(room.name)}</span>
+  els.roomsList.innerHTML = state.rooms.map((room) => {
+    const members = room.members || [];
+    const expanded = state.expandedRooms.has(room.id);
+    return `
+    <article class="room-card ${room.id === state.activeRoomId ? "active" : ""} ${expanded ? "expanded" : ""}" data-room-card="${escapeHtml(room.id)}">
+      <div class="room-summary" data-room-toggle="${escapeHtml(room.id)}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
+        <span class="summary-caret" aria-hidden="true">›</span>
+        <span class="room-summary-main">
+          <span class="room-name">${escapeHtml(room.name)}</span>
+        </span>
         <button type="button" class="danger-button" data-delete-room="${escapeHtml(room.id)}" title="删除协作室">删除</button>
       </div>
-      <div class="meta">${room.members?.length || 0} agents</div>
-    </div>
-  `).join("");
+      <div class="room-body">
+        <div class="meta">共 ${members.length} 个 agents</div>
+        <div class="room-member-list">
+          ${members.length
+            ? members.map((member) => `<span class="room-member-chip">${escapeHtml(member.name || member.agentId)}</span>`).join("")
+            : `<span class="room-member-chip muted">暂无成员</span>`}
+        </div>
+      </div>
+    </article>
+  `;
+  }).join("");
   els.roomsList.scrollTop = previousScrollTop;
 
-  els.roomsList.querySelectorAll("[data-room-id]").forEach((item) => {
+  els.roomsList.querySelectorAll("[data-room-toggle]").forEach((toggle) => {
     const activate = async () => {
-      state.activeRoomId = item.dataset.roomId;
+      const roomId = toggle.dataset.roomToggle;
+      const wasActive = state.activeRoomId === roomId;
+      state.activeRoomId = roomId;
+      if (state.expandedRooms.has(roomId) && wasActive) {
+        state.expandedRooms.delete(roomId);
+      } else {
+        state.expandedRooms.add(roomId);
+      }
       await loadActiveRoom();
     };
-    item.addEventListener("click", activate);
-    item.addEventListener("keydown", (event) => {
+    toggle.addEventListener("click", activate);
+    toggle.addEventListener("keydown", (event) => {
+      if (event.target.closest("button, input, textarea, select")) {
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         activate();
@@ -850,11 +880,12 @@ function updateInspectorTaskLayout(hasOpenTask, hasManyTasks) {
 
 function renderTaskStage(stage) {
   const detailOpen = ["running", "failed"].includes(stage.status);
+  const title = displayStageTitle(stage.title);
   return `
     <details class="stage" ${detailOpen ? "open" : ""}>
       <summary class="stage-summary">
         <div class="stage-row">
-          <span class="stage-name">${escapeHtml(stage.title)}</span>
+          <span class="stage-name">${escapeHtml(title)}</span>
           <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(statusLabel(stage.status))}</span>
         </div>
         <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
@@ -1181,19 +1212,19 @@ function fitMemberGraphRows() {
   const specialistCount = Math.max(1, Number(graph.dataset.specialistCount || 1));
   const estimatedWidth = specialistCount * 108 + Math.max(0, specialistCount - 1) * 7;
   const estimatedRatio = availableWidth / estimatedWidth;
-  const scale = Math.max(0.36, Math.min(1, estimatedRatio));
+  const scale = Math.max(0.24, Math.min(1, estimatedRatio));
 
   graph.style.setProperty("--graph-scale", scale.toFixed(3));
   graph.style.setProperty("--graph-node-width", `${Math.round(108 * scale)}px`);
   graph.style.setProperty("--graph-node-height", `${Math.round(54 * scale)}px`);
   graph.style.setProperty("--graph-supervisor-width", `${Math.round(152 * scale)}px`);
   graph.style.setProperty("--graph-supervisor-height", `${Math.round(60 * scale)}px`);
-  graph.style.setProperty("--graph-node-gap", `${Math.max(3, Math.round(7 * scale))}px`);
+  graph.style.setProperty("--graph-node-gap", `${Math.max(2, Math.round(7 * scale))}px`);
   graph.style.setProperty("--graph-node-pad-y", `${Math.max(3, Math.round(7 * scale))}px`);
   graph.style.setProperty("--graph-node-pad-x", `${Math.max(4, Math.round(8 * scale))}px`);
-  graph.style.setProperty("--graph-badge-font", `${Math.max(7.5, 10 * scale).toFixed(1)}px`);
-  graph.style.setProperty("--graph-name-font", `${Math.max(8.5, 12 * scale).toFixed(1)}px`);
-  graph.style.setProperty("--graph-subtitle-font", `${Math.max(8, 11 * scale).toFixed(1)}px`);
+  graph.style.setProperty("--graph-badge-font", `${Math.max(6.5, 10 * scale).toFixed(1)}px`);
+  graph.style.setProperty("--graph-name-font", `${Math.max(7.5, 12 * scale).toFixed(1)}px`);
+  graph.style.setProperty("--graph-subtitle-font", `${Math.max(7, 11 * scale).toFixed(1)}px`);
 }
 
 function drawMemberGraphLines() {
@@ -1265,7 +1296,7 @@ function labelForEvent(event) {
     "member.added": "Agent 已加入",
     "member.removed": "Agent 已移除",
     "task.created": "任务已创建",
-    "task.planned": "Supervisor 已生成协作计划",
+    "task.planned": "总控已生成协作计划",
     "task.running": "任务运行中",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
@@ -1276,21 +1307,26 @@ function labelForEvent(event) {
   })[event.type] || event.type.replaceAll(".", " ");
 }
 
+function displayStageTitle(title) {
+  const normalized = String(title || "").trim();
+  return STAGE_TITLE_LABELS[normalized] || normalized;
+}
+
 function bodyForEvent(event, payload) {
   if (event.type === "stage.completed") {
     return `${payload.agentId}: ${payload.result?.summary || "已完成"}`;
   }
   if (event.type === "stage.running") {
-    return `${payload.agentId} 正在执行 ${payload.title}`;
+    return `${payload.agentId} 正在执行 ${displayStageTitle(payload.title)}`;
   }
   if (event.type === "stage.assigned") {
-    return `${payload.stage?.title || "阶段"} 分配给 ${payload.agentId}`;
+    return `${displayStageTitle(payload.stage?.title || "阶段")} 分配给 ${payload.agentId}`;
   }
   if (event.type === "task.planned") {
     const stages = payload.stages || [];
     return stages.length
-      ? stages.map((stage) => `${stage.title} -> ${stage.assignedAgentId}`).join("\n")
-      : "Supervisor 未要求追加子任务阶段";
+      ? stages.map((stage) => `${displayStageTitle(stage.title)} -> ${stage.assignedAgentId}`).join("\n")
+      : "总控未要求追加子任务阶段";
   }
   if (event.type === "task.created") {
     return payload.goal || "任务已创建";
@@ -1338,7 +1374,7 @@ function eventToMessage(event) {
       kind: "agent",
       author: agent.name,
       agentId: payload.agentId,
-      title: payload.stage?.title || stageTitleFromEvent(event) || "阶段输出",
+      title: displayStageTitle(payload.stage?.title || stageTitleFromEvent(event) || "阶段输出"),
       time: event.timestamp,
       body: payload.result?.summary || "已完成"
     };
@@ -1350,8 +1386,8 @@ function eventToMessage(event) {
       kind: "system",
       time: event.timestamp,
       body: stages.length
-        ? `Supervisor 已生成协作计划：${stages.map((stage) => `${stage.title} -> ${stage.assignedAgentId}`).join("；")}`
-        : "Supervisor 未要求追加子任务阶段"
+        ? `总控已生成协作计划：${stages.map((stage) => `${displayStageTitle(stage.title)} -> ${stage.assignedAgentId}`).join("；")}`
+        : "总控未要求追加子任务阶段"
     };
   }
 
@@ -1359,7 +1395,7 @@ function eventToMessage(event) {
     return {
       kind: "system",
       time: event.timestamp,
-      body: `${payload.agentId} 正在执行 ${payload.title}`
+      body: `${payload.agentId} 正在执行 ${displayStageTitle(payload.title)}`
     };
   }
 
@@ -1367,7 +1403,7 @@ function eventToMessage(event) {
     return {
       kind: "system",
       time: event.timestamp,
-      body: `${payload.stage?.title || "阶段"} 分配给 ${payload.agentId}`
+      body: `${displayStageTitle(payload.stage?.title || "阶段")} 分配给 ${payload.agentId}`
     };
   }
 
@@ -1451,7 +1487,8 @@ function renderMessage(message) {
   }
 
   const avatar = initials(message.author);
-  const title = message.title ? `<div class="message-stage">${escapeHtml(message.title)}</div>` : "";
+  const displayTitle = displayStageTitle(message.title);
+  const title = displayTitle ? `<div class="message-stage">${escapeHtml(displayTitle)}</div>` : "";
   const collapsible = isLongMessage(message.body);
   const expanded = message.id && state.expandedMessages.has(message.id);
   return `
