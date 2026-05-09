@@ -2,6 +2,9 @@ import { createTaskGraph, findSupervisorMember, inferCapabilities, normalizePoli
 import { normalizePromptTemplates, renderTemplate } from "./prompt-templates.js";
 import { createId, nowIso } from "./utils.js";
 
+const AUTO_RETRY_DELAY_MS = 5000;
+const AUTO_RETRY_MAX_ATTEMPTS = 3;
+
 export class Orchestrator {
   constructor({ store, events, adapter }) {
     this.store = store;
@@ -80,7 +83,7 @@ export class Orchestrator {
     });
 
     let resumed = false;
-    if (activeTask && shouldResumeFromMessage(content)) {
+    if (activeTask && (activeTask.status === "pending" || shouldResumeFromMessage(content))) {
       resumed = await this.resumeTask(activeTask.id, content);
     }
     return { event, message: { content }, activeTask, resumed };
@@ -135,15 +138,35 @@ export class Orchestrator {
       return false;
     }
 
+    const resumeInstruction = String(humanInstruction || "").trim();
+    const wasPending = task.status === "pending";
     task.status = "queued";
     task.error = null;
-    task.resumeInstruction = String(humanInstruction || "").trim();
+    task.resumeInstruction = resumeInstruction;
     task.resumeRequestedAt = nowIso();
-    for (const stage of task.stages || []) {
-      if (["running", "failed"].includes(stage.status)) {
-        stage.status = "queued";
-        stage.error = null;
-        stage.startedAt = null;
+
+    if (wasPending) {
+      task.pendingResolvedAt = nowIso();
+      task.pendingResolution = resumeInstruction;
+      task.pendingAt = null;
+      task.pendingReason = null;
+      task.pendingStageId = null;
+      task.confirmationPoints = [];
+      task.stages.push(createRuntimeStage({
+        type: "supervisor_dispatch",
+        title: "Supervisor Dispatch",
+        needs: ["supervisor", "planning", "analysis"],
+        goal: "基于人工补充信息重新分析原任务，并继续安排后续协作。",
+        reason: "Human provided confirmation for a pending task; Supervisor should re-plan with the updated context."
+      }));
+      renumberStages(task.stages);
+    } else {
+      for (const stage of task.stages || []) {
+        if (["running", "failed"].includes(stage.status)) {
+          stage.status = "queued";
+          stage.error = null;
+          stage.startedAt = null;
+        }
       }
     }
     await this.store.updateTask(task);
@@ -247,17 +270,32 @@ export class Orchestrator {
           taskMessages
         });
 
-        const result = await this.adapter.runAgent(member.agentId, input, {
-          roomId: room.id,
-          taskId: task.id,
-          stageId: stage.id,
-          stageType: stage.type,
-          goal: task.goal,
-          previousOutputs,
-          roomContext,
-          taskMessages,
-          resumeInstruction: task.resumeInstruction || ""
-        });
+        let result;
+        try {
+          result = await this.adapter.runAgent(member.agentId, input, {
+            roomId: room.id,
+            taskId: task.id,
+            stageId: stage.id,
+            stageType: stage.type,
+            goal: task.goal,
+            previousOutputs,
+            roomContext,
+            taskMessages,
+            resumeInstruction: task.resumeInstruction || ""
+          });
+        } catch (error) {
+          const shouldRetry = await this.scheduleAutoRetry({
+            roomId: room.id,
+            task,
+            stage,
+            member,
+            error
+          });
+          if (shouldRetry) {
+            continue;
+          }
+          throw error;
+        }
 
         const afterRun = await this.store.getTask(task.id);
         if (!afterRun || afterRun.status === "cancelled" || afterRun.cancelRequested) {
@@ -291,6 +329,26 @@ export class Orchestrator {
           result: stage.result
         });
 
+        if (policy.mode === "supervisor" && stage.type === "supervisor_review") {
+          const reviewDecision = parseSupervisorReviewDecision(stage.result?.summary || "");
+          if (reviewDecision.pending) {
+            task.status = "pending";
+            task.pendingAt = nowIso();
+            task.pendingStageId = stage.id;
+            task.pendingReason = reviewDecision.reason;
+            task.confirmationPoints = reviewDecision.confirmationPoints;
+            task.error = null;
+            await this.store.updateTask(task);
+            await this.events.publish(room.id, "task.pending", {
+              taskId: task.id,
+              reason: reviewDecision.reason,
+              confirmationPoints: reviewDecision.confirmationPoints,
+              summary: stage.result?.summary || ""
+            });
+            return;
+          }
+        }
+
         if (policy.mode === "supervisor" && stage.type === "supervisor_dispatch") {
           const followUpStages = createSupervisorFollowUpStages({
             room: latestRoom,
@@ -320,6 +378,10 @@ export class Orchestrator {
 
       task.status = "completed";
       task.completedAt = nowIso();
+      task.pendingAt = null;
+      task.pendingReason = null;
+      task.pendingStageId = null;
+      task.confirmationPoints = [];
       await this.store.updateTask(task);
       await this.events.publish(room.id, "task.completed", {
         taskId: task.id,
@@ -345,6 +407,64 @@ export class Orchestrator {
     } finally {
       this.runningTasks.delete(taskId);
     }
+  }
+
+  async scheduleAutoRetry({ roomId, task, stage, member, error }) {
+    if (!isRecoverableOpenClawError(error)) {
+      return false;
+    }
+    const retryCount = Number(stage.autoRetryCount || 0);
+    if (retryCount >= AUTO_RETRY_MAX_ATTEMPTS) {
+      return false;
+    }
+
+    const attempt = retryCount + 1;
+    const retryAt = new Date(Date.now() + AUTO_RETRY_DELAY_MS).toISOString();
+    this.busyAgents.delete(member.agentId);
+    await this.store.setMemberStatus(roomId, member.agentId, "idle");
+
+    if (typeof this.adapter.resetConnection === "function") {
+      await this.adapter.resetConnection().catch(() => {});
+    }
+
+    stage.status = "queued";
+    stage.error = error.message;
+    stage.startedAt = null;
+    stage.autoRetryCount = attempt;
+    stage.retryAt = retryAt;
+    task.status = "retrying";
+    task.error = error.message;
+    task.retryAt = retryAt;
+    task.retryReason = error.message;
+    await this.store.updateTask(task);
+    await this.events.publish(roomId, "task.retry_scheduled", {
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      title: stage.title,
+      error: error.message,
+      attempt,
+      maxAttempts: AUTO_RETRY_MAX_ATTEMPTS,
+      delayMs: AUTO_RETRY_DELAY_MS,
+      retryAt
+    });
+
+    await sleep(AUTO_RETRY_DELAY_MS);
+    const latest = await this.store.getTask(task.id);
+    if (!latest || latest.status === "cancelled" || latest.cancelRequested) {
+      return true;
+    }
+    Object.assign(task, latest);
+    task.status = "running";
+    task.retryAt = null;
+    task.retryReason = null;
+    const latestStage = task.stages.find((item) => item.id === stage.id);
+    if (latestStage) {
+      Object.assign(stage, latestStage);
+      stage.retryAt = null;
+    }
+    await this.store.updateTask(task);
+    return true;
   }
 
   async failTask(taskId, error) {
@@ -411,7 +531,7 @@ export class Orchestrator {
 
 function buildAgentInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages }) {
   if (stage.type === "supervisor_dispatch") {
-    return buildSupervisorDispatchInput({ room, task, member, roomContext, taskMessages });
+    return buildSupervisorDispatchInput({ room, task, member, previousOutputs, roomContext, taskMessages });
   }
   if (stage.type === "specialist_work") {
     return buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages });
@@ -480,19 +600,25 @@ function normalizeAgentResult(result) {
   };
 }
 
-function buildSupervisorDispatchInput({ room, task, member, roomContext, taskMessages }) {
+function buildSupervisorDispatchInput({ room, task, member, previousOutputs, roomContext, taskMessages }) {
   const policy = normalizePolicy(room.policy);
   const templates = normalizePromptTemplates(policy.promptTemplates);
-  return renderTemplate(templates.supervisorDispatch, buildPromptValues({
+  const values = buildPromptValues({
     room,
     task,
     member,
-    previousOutputs: [],
+    previousOutputs,
     roomContext,
     taskMessages,
     policy,
     templates
-  }));
+  });
+  return [
+    renderTemplate(templates.supervisorDispatch, values),
+    "",
+    "当前任务已有阶段输出:",
+    values.previousOutputs
+  ].join("\n");
 }
 
 function buildSpecialistInput({ room, task, stage, member, previousOutputs, roomContext, taskMessages }) {
@@ -514,7 +640,7 @@ function buildSpecialistInput({ room, task, stage, member, previousOutputs, room
 function buildSupervisorReviewInput({ room, task, member, previousOutputs, roomContext, taskMessages }) {
   const policy = normalizePolicy(room.policy);
   const templates = normalizePromptTemplates(policy.promptTemplates);
-  return renderTemplate(templates.supervisorReview, buildPromptValues({
+  const values = buildPromptValues({
     room,
     task,
     member,
@@ -523,7 +649,12 @@ function buildSupervisorReviewInput({ room, task, member, previousOutputs, roomC
     taskMessages,
     policy,
     templates
-  }));
+  });
+  return [
+    renderTemplate(templates.supervisorReview, values),
+    "",
+    values.reviewJsonContract
+  ].join("\n");
 }
 
 function buildPromptValues({ room, task, stage = {}, member, previousOutputs, roomContext, taskMessages, policy, templates }) {
@@ -545,6 +676,7 @@ function buildPromptValues({ room, task, stage = {}, member, previousOutputs, ro
     stageReason: stage.reason || "未指定。",
     resumeInstruction: task.resumeInstruction ? `续跑指令: ${task.resumeInstruction}` : "",
     dispatchJsonContract: dispatchJsonContract(),
+    reviewJsonContract: reviewJsonContract(),
     supervisorExtraPrompt: policy.supervisorExtraPrompt ? `协作室自定义总控指导:\n${policy.supervisorExtraPrompt}` : "",
     specialistExtraPrompt: policy.specialistExtraPrompt ? `协作室自定义子 Agent 指导:\n${policy.specialistExtraPrompt}` : "",
     reviewExtraPrompt: policy.reviewExtraPrompt ? `协作室自定义复核指导:\n${policy.reviewExtraPrompt}` : "",
@@ -552,6 +684,25 @@ function buildPromptValues({ room, task, stage = {}, member, previousOutputs, ro
       ? "注意: 如果你不输出可解析 JSON，TeamRoom 不会兜底安排任何子 agent。"
       : ""
   };
+}
+
+function reviewJsonContract() {
+  return [
+    "重要输出要求:",
+    "- 你是本次任务最后的审核人。",
+    "- 如果最终结论中仍存在需要 BA、业务方、用户或人工确认/澄清/补充的信息，任务不能自动完成。",
+    "- 这种情况下请把 status 设为 pending，并把确认问题写入 confirmation_points。",
+    "- 如果没有任何人工确认点，请把 status 设为 completed，confirmation_points 为空数组。",
+    "",
+    "请在回答末尾包含下面这个机器可读 JSON 块，TeamRoom 会据此判断任务是否完成:",
+    "TEAMROOM_REVIEW_JSON_START",
+    JSON.stringify({
+      status: "completed",
+      summary: "一句话最终审核结论",
+      confirmation_points: []
+    }, null, 2),
+    "TEAMROOM_REVIEW_JSON_END"
+  ].join("\n");
 }
 
 function dispatchJsonContract() {
@@ -641,7 +792,7 @@ function createSupervisorFollowUpStages({ room, task, dispatchStage, policy }) {
     reason: item.reason
   }));
 
-  if (stages.length > 0 && policy.requireReview && supervisor) {
+  if (supervisor) {
     stages.push(createRuntimeStage({
       type: "supervisor_review",
       title: "Supervisor Review",
@@ -684,6 +835,169 @@ function parseDispatchJson(text) {
     return parseJsonCandidate(raw.slice(firstBrace, lastBrace + 1));
   }
   return null;
+}
+
+function parseSupervisorReviewDecision(text) {
+  const parsed = parseReviewJson(text);
+  const parsedPoints = normalizeConfirmationPoints(
+    parsed?.confirmation_points
+    || parsed?.confirmationPoints
+    || parsed?.confirmations
+    || parsed?.questions
+  );
+  const parsedStatus = String(parsed?.status || "").trim().toLowerCase();
+  const heuristicPoints = inferConfirmationPoints(stripReviewJsonBlock(text));
+  if (parsedStatus === "pending" || parsedPoints.length > 0 || heuristicPoints.length > 0) {
+    const confirmationPoints = parsedPoints.length ? parsedPoints : heuristicPoints;
+    return {
+      pending: true,
+      reason: parsed?.summary || parsed?.reason || "总控审核认为仍存在需要人工确认的点。",
+      confirmationPoints: confirmationPoints.length ? confirmationPoints : ["总控审核认为仍存在需要人工确认的点。"]
+    };
+  }
+  if (["completed", "complete", "done"].includes(parsedStatus)) {
+    return {
+      pending: false,
+      reason: parsed?.summary || "总控审核确认无需人工补充。",
+      confirmationPoints: []
+    };
+  }
+
+  return {
+    pending: heuristicPoints.length > 0,
+    reason: heuristicPoints.length > 0 ? "总控审核认为仍存在需要人工确认的点。" : "总控审核确认无需人工补充。",
+    confirmationPoints: heuristicPoints
+  };
+}
+
+function parseReviewJson(text) {
+  const raw = String(text || "");
+  const marked = raw.match(/TEAMROOM_REVIEW_JSON_START\s*([\s\S]*?)\s*TEAMROOM_REVIEW_JSON_END/);
+  if (!marked) {
+    return null;
+  }
+  const fenced = String(marked[1]).match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  return parseJsonCandidate(fenced ? fenced[1] : marked[1]);
+}
+
+function stripReviewJsonBlock(text) {
+  return String(text || "").replace(/TEAMROOM_REVIEW_JSON_START[\s\S]*?TEAMROOM_REVIEW_JSON_END/gi, "");
+}
+
+function normalizeConfirmationPoints(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .filter((item) => !isNegativeConfirmationText(item));
+  }
+  if (typeof value === "string" && value.trim()) {
+    return isNegativeConfirmationText(value) ? [] : [value.trim()];
+  }
+  return [];
+}
+
+function inferConfirmationPoints(text) {
+  const raw = String(text || "").trim();
+  if (!raw) {
+    return [];
+  }
+  if (isNegativeConfirmationText(raw)) {
+    return [];
+  }
+  const section = extractConfirmationSection(raw);
+  const source = section || raw;
+  if (section && sectionHasNoConfirmation(section)) {
+    return [];
+  }
+  if (isNegativeConfirmationText(source)) {
+    return [];
+  }
+  const tablePoints = extractConfirmationTablePoints(source);
+  if (tablePoints.length > 0) {
+    return tablePoints;
+  }
+  const lines = source
+    .split("\n")
+    .map((line) => line.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean)
+    .filter((line) => !isNegativeConfirmationText(line));
+
+  const pointLines = lines.filter((line) => (
+    /(确认|澄清|补充|待定|待确认|待回答|需要|需\s*|回答|决策|选择|决定)/.test(line)
+    && /(BA|业务方|人工|人为|用户|你|确认|澄清|补充|回答|决策|选择|决定)/i.test(line)
+  ));
+  if (pointLines.length > 0) {
+    return pointLines.slice(0, 6);
+  }
+
+  return hasHumanConfirmationSignal(source) ? ["总控审核认为仍存在需要人工确认的点。"] : [];
+}
+
+function extractConfirmationTablePoints(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes("|"))
+    .filter((line) => !/^\|?[\s:-]+\|[\s|:-]*$/.test(line))
+    .map((line) => line.split("|").map((cell) => cell.trim()).filter(Boolean))
+    .filter((cells) => cells.length >= 3)
+    .filter((cells) => !["#", "序号", "问题", "选项", "选项/建议"].some((header) => cells.join("").includes(header) && cells[0] === header))
+    .map((cells) => {
+      const issue = cells[1] || cells[0];
+      const suggestion = cells[2] || "";
+      return suggestion ? `${issue}: ${suggestion}` : issue;
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+}
+
+function hasHumanConfirmationSignal(text) {
+  const source = String(text || "");
+  return /确认点汇总|等待业务定义澄清|需\s*(?:BA|业务方|人工|人为|用户|你)(?:\s*\/\s*(?:BA|业务方|人工|用户|你))*\s*(?:回答|确认|澄清|补充|决策|选择|决定)|(?:需要|需|待).{0,16}(?:BA|业务方|人工|人为|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)|(?:请|由).{0,8}(?:BA|业务方|人工|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)|待确认|待回答|confirmation_points/i.test(source);
+}
+
+function extractConfirmationSection(text) {
+  const match = String(text || "").match(/(?:需(?:要)?\s*(?:BA|业务方|人工|用户|你).{0,16}(?:回答|确认|澄清|补充).{0,12}|确认(?:的问题|点)|待(?:确认|回答)|confirmation_points)[\s\S]*?(?=\n#{1,6}\s|\n---|\n下一步|$)/i);
+  return match ? match[0] : "";
+}
+
+function sectionHasNoConfirmation(section) {
+  const lines = String(section || "")
+    .split("\n")
+    .map((line) => line.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean);
+  const contentLines = lines.filter((line) => (
+    !/^(?:需(?:要)?\s*)?(?:BA|业务方|人工|用户|你)?.{0,12}(?:确认|澄清|补充)(?:的问题|点)?$/i.test(line)
+    && !(/确认/.test(line) && /(点|问题)/.test(line) && line.length <= 40)
+    && !/^confirmation_points$/i.test(line)
+  ));
+  return contentLines.length > 0 && isNegativeConfirmationText(contentLines[0]);
+}
+
+function isNegativeConfirmationText(text) {
+  const normalized = String(text || "")
+    .replace(/\s+/g, "")
+    .replace(/[：:]/g, "")
+    .toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return [
+    "无",
+    "暂无",
+    "没有",
+    "无需",
+    "无须",
+    "不需要",
+    "无需ba",
+    "无需业务方",
+    "无需人工",
+    "无需用户",
+    "无需确认",
+    "不需要确认",
+    "无待确认"
+  ].some((keyword) => normalized === keyword || normalized.startsWith(keyword));
 }
 
 function parseJsonCandidate(value) {
@@ -838,6 +1152,15 @@ function collectCompletedOutputs(task) {
 function firstIncompleteStageIndex(stages = []) {
   const index = stages.findIndex((stage) => stage.status !== "completed");
   return index >= 0 ? index : stages.length;
+}
+
+function isRecoverableOpenClawError(error) {
+  const message = String(error?.message || error || "");
+  return /OpenClaw gateway (?:connection closed|is not connected|request timed out|websocket upgrade failed)|OpenClaw chat run timed out|device nonce mismatch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|network/i.test(message);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function shouldResumeFromMessage(content) {

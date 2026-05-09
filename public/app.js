@@ -22,6 +22,8 @@ const state = {
   sourceRoomId: ""
 };
 
+let retryCountdownTimer = null;
+
 const OPENCLAW_AGENT_FILES = [
   "AGENTS.md",
   "SOUL.md",
@@ -478,6 +480,8 @@ function connectEvents() {
     "task.created",
     "task.planned",
     "task.running",
+    "task.pending",
+    "task.retry_scheduled",
     "task.completed",
     "task.failed",
     "task.cancelled",
@@ -805,7 +809,7 @@ function renderActiveRoom() {
   els.activeRoomName.textContent = room.name;
   const mode = room.policy?.mode || "supervisor";
   els.activeRoomPolicy.textContent = mode === "supervisor"
-    ? `${policyLabel(mode)} · Supervisor 拆题 · ${room.policy?.requireReview ? "最终审核开启" : "最终审核关闭"}`
+    ? `${policyLabel(mode)} · Supervisor 拆题 · 总控终审`
     : `${policyLabel(mode)} · ${room.policy?.requireReview ? "审核开启" : "审核关闭"} · max ${room.policy?.maxParallel || 1}`;
   els.memberChips.innerHTML = renderMemberGraph(room);
   window.requestAnimationFrame(() => {
@@ -817,13 +821,25 @@ function renderActiveRoom() {
   els.chatForm.querySelector("button").disabled = false;
   els.cancelTaskButton.disabled = !current;
   els.activeTaskStatus.innerHTML = current
-    ? `<strong>${escapeHtml(statusLabel(current.status))}</strong><span>${escapeHtml(current.goal)}</span>`
+    ? renderActiveTaskStatus(current)
     : "暂无当前任务";
+}
+
+function renderActiveTaskStatus(task) {
+  const points = Array.isArray(task.confirmationPoints) ? task.confirmationPoints.filter(Boolean) : [];
+  const pendingHint = task.status === "pending"
+    ? `<span class="pending-hint">${escapeHtml(points[0] || "请在中间聊天窗补充确认点，系统会继续交给总控分析。")}</span>`
+    : "";
+  const retryHint = task.status === "retrying"
+    ? `<span class="retry-hint">OpenClaw 连接异常，正在自动重连继续。</span>`
+    : "";
+  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}`;
 }
 
 function renderEvents() {
   if (!state.events.length) {
     els.eventsFeed.innerHTML = `<div class="empty">暂无对话</div>`;
+    startRetryCountdowns();
     return;
   }
   els.eventsFeed.innerHTML = state.events
@@ -832,7 +848,35 @@ function renderEvents() {
     .map(renderMessage)
     .join("");
   bindMessageToggles();
+  startRetryCountdowns();
   els.eventsFeed.scrollTop = els.eventsFeed.scrollHeight;
+}
+
+function startRetryCountdowns() {
+  updateRetryCountdowns();
+  const hasCountdown = Boolean(els.eventsFeed.querySelector("[data-retry-at]"));
+  if (hasCountdown && !retryCountdownTimer) {
+    retryCountdownTimer = window.setInterval(updateRetryCountdowns, 1000);
+  }
+  if (!hasCountdown && retryCountdownTimer) {
+    window.clearInterval(retryCountdownTimer);
+    retryCountdownTimer = null;
+  }
+}
+
+function updateRetryCountdowns() {
+  if (!els.eventsFeed) {
+    return;
+  }
+  els.eventsFeed.querySelectorAll("[data-retry-at]").forEach((item) => {
+    const retryAt = new Date(item.dataset.retryAt).getTime();
+    if (!Number.isFinite(retryAt)) {
+      item.textContent = "准备自动重连";
+      return;
+    }
+    const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+    item.textContent = seconds > 0 ? `${seconds}s 后自动重连` : "正在自动重连";
+  });
 }
 
 function renderTasks() {
@@ -1298,6 +1342,8 @@ function labelForEvent(event) {
     "task.created": "任务已创建",
     "task.planned": "总控已生成协作计划",
     "task.running": "任务运行中",
+    "task.pending": "等待人工确认",
+    "task.retry_scheduled": "自动重连",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
     "stage.assigned": "阶段已分配",
@@ -1333,6 +1379,15 @@ function bodyForEvent(event, payload) {
   }
   if (event.type === "task.completed") {
     return payload.summary || "任务已完成";
+  }
+  if (event.type === "task.pending") {
+    const points = payload.confirmationPoints || [];
+    return points.length
+      ? `任务等待人工确认：${points.join("；")}`
+      : (payload.reason || "任务等待人工确认");
+  }
+  if (event.type === "task.retry_scheduled") {
+    return `OpenClaw 连接异常：${payload.error || "连接中断"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动继续。`;
   }
   if (event.type === "task.failed") {
     return payload.error || "任务失败";
@@ -1431,6 +1486,26 @@ function eventToMessage(event) {
     };
   }
 
+  if (event.type === "task.pending") {
+    const points = payload.confirmationPoints || [];
+    return {
+      kind: "system pending",
+      time: event.timestamp,
+      body: points.length
+        ? `任务等待人工确认：${points.join("；")}`
+        : (payload.reason || "任务等待人工确认")
+    };
+  }
+
+  if (event.type === "task.retry_scheduled") {
+    return {
+      kind: "system retry",
+      time: event.timestamp,
+      retryAt: payload.retryAt,
+      body: `OpenClaw 连接异常，已安排自动重连继续。${payload.error ? `原因：${payload.error}` : ""}`.trim()
+    };
+  }
+
   if (event.type === "task.cancelled") {
     return {
       kind: "system",
@@ -1478,9 +1553,13 @@ function eventToMessage(event) {
 
 function renderMessage(message) {
   if (message.kind.startsWith("system")) {
+    const retryCountdown = message.retryAt
+      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}">5s 后自动重连</strong>`
+      : "";
     return `
-      <div class="message-system ${message.kind.includes("error") ? "error" : ""}">
+      <div class="message-system ${message.kind.includes("error") ? "error" : ""} ${message.kind.includes("pending") ? "pending" : ""} ${message.kind.includes("retry") ? "retry" : ""}">
         <span>${renderMarkdownInline(message.body)}</span>
+        ${retryCountdown}
         <time>${formatTime(message.time)}</time>
       </div>
     `;
@@ -1582,6 +1661,8 @@ function statusLabel(status) {
   return ({
     queued: "等待中",
     running: "运行中",
+    retrying: "重连中",
+    pending: "待确认",
     completed: "已完成",
     failed: "已中断",
     cancelled: "已终止"

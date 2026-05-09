@@ -215,6 +215,12 @@ export class JsonStore {
       createdAt: timestamp,
       updatedAt: timestamp,
       completedAt: null,
+      pendingAt: null,
+      pendingReason: null,
+      pendingStageId: null,
+      confirmationPoints: [],
+      retryAt: null,
+      retryReason: null,
       error: null
     };
     this.data.tasks[task.id] = task;

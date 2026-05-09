@@ -45,6 +45,10 @@ export function createOpenClawGatewayAdapter(config) {
         artifacts: [],
         nextActions: []
       };
+    },
+
+    async resetConnection() {
+      client.resetConnection();
     }
   };
 }
@@ -279,6 +283,8 @@ class GatewayRpcClient {
 
   handleClose() {
     this.connected = false;
+    this.connectNonce = "";
+    this.socket = null;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error("OpenClaw gateway connection closed"));
@@ -289,6 +295,19 @@ class GatewayRpcClient {
       waiter.reject(new Error("OpenClaw gateway connection closed"));
     }
     this.chatWaiters.clear();
+  }
+
+  resetConnection() {
+    const socket = this.socket;
+    this.connected = false;
+    this.connecting = null;
+    this.socket = null;
+    this.buffer = Buffer.alloc(0);
+    this.connectNonce = "";
+    if (socket && !socket.destroyed) {
+      socket.destroy();
+    }
+    this.handleClose();
   }
 
   connectParams() {

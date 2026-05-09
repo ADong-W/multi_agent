@@ -1120,6 +1120,18 @@ details[open] > summary .summary-caret {
   color: var(--amber);
 }
 
+.status-pill.pending {
+  border-color: #ffd88a;
+  background: #fff7e6;
+  color: #9a5b00;
+}
+
+.status-pill.retrying {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--accent);
+}
+
 .status-pill.completed {
   border-color: #d2d2d7;
   background: #ffffff;
@@ -1139,22 +1151,56 @@ details[open] > summary .summary-caret {
 }
 
 .active-task-status {
-  display: grid;
-  gap: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   margin-bottom: 10px;
-  min-height: 36px;
-  padding: 8px 9px;
+  min-height: 48px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--surface-quiet);
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.35;
   box-shadow: var(--shadow-inset);
+  overflow: hidden;
 }
 
 .active-task-status strong {
+  flex: 0 0 auto;
   color: var(--accent-strong);
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.active-task-status .active-task-goal {
+  display: -webkit-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: #6e6e73;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.active-task-status .pending-hint {
+  display: -webkit-box;
+  width: 100%;
+  overflow: hidden;
+  color: #9a5b00;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.active-task-status .retry-hint {
+  display: -webkit-box;
+  width: 100%;
+  overflow: hidden;
+  color: var(--accent);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .task-control-section .stack {
@@ -1388,6 +1434,24 @@ details[open] > summary .summary-caret {
   border-color: #fecaca;
   background: #fff1f2;
   color: var(--red);
+}
+
+.message-system.pending {
+  border-color: #ffd88a;
+  background: #fff7e6;
+  color: #9a5b00;
+}
+
+.message-system.retry {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--accent);
+}
+
+.retry-countdown {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .message-system time,
@@ -1934,8 +1998,8 @@ details[open] > summary .summary-caret {
 
   .active-task-status {
     margin-bottom: 8px;
-    min-height: 32px;
-    padding: 7px 8px;
+    min-height: 44px;
+    padding: 8px 10px;
   }
 
   .task-control-section textarea {
