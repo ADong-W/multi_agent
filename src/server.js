@@ -28,6 +28,11 @@ export async function createTeamRoomServer(config = loadConfig()) {
   const agentFiles = createOpenClawAgentFiles(config);
   const events = new EventHub({ store });
   const orchestrator = new Orchestrator({ store, events, adapter });
+  queueMicrotask(() => {
+    orchestrator.recoverInternalPendingTasks().catch((error) => {
+      console.error("Failed to recover internal pending tasks:", error);
+    });
+  });
 
   const server = http.createServer(async (req, res) => {
     try {

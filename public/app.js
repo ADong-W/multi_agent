@@ -266,6 +266,14 @@ els.chatForm.addEventListener("submit", async (event) => {
     return;
   }
   els.chatMessageInput.value = "";
+  await submitHumanContent(content, {
+    restoreOnError: () => {
+      els.chatMessageInput.value = content;
+    }
+  });
+});
+
+async function submitHumanContent(content, { restoreOnError } = {}) {
   try {
     const result = await api(`/api/rooms/${state.activeRoomId}/messages`, {
       method: "POST",
@@ -275,9 +283,11 @@ els.chatForm.addEventListener("submit", async (event) => {
     setTimeout(loadActiveRoom, 300);
   } catch (error) {
     setConnection(error.message);
-    els.chatMessageInput.value = content;
+    if (typeof restoreOnError === "function") {
+      restoreOnError();
+    }
   }
-});
+}
 
 els.cancelTaskButton.addEventListener("click", async () => {
   const task = activeTask();
@@ -482,6 +492,7 @@ function connectEvents() {
     "task.running",
     "task.pending",
     "task.retry_scheduled",
+    "task.wait_scheduled",
     "task.completed",
     "task.failed",
     "task.cancelled",
@@ -848,6 +859,7 @@ function renderEvents() {
     .map(renderMessage)
     .join("");
   bindMessageToggles();
+  bindPendingDecisionPanels();
   startRetryCountdowns();
   els.eventsFeed.scrollTop = els.eventsFeed.scrollHeight;
 }
@@ -870,12 +882,13 @@ function updateRetryCountdowns() {
   }
   els.eventsFeed.querySelectorAll("[data-retry-at]").forEach((item) => {
     const retryAt = new Date(item.dataset.retryAt).getTime();
+    const label = item.dataset.retryLabel || "自动重连";
     if (!Number.isFinite(retryAt)) {
-      item.textContent = "准备自动重连";
+      item.textContent = `准备${label}`;
       return;
     }
     const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
-    item.textContent = seconds > 0 ? `${seconds}s 后自动重连` : "正在自动重连";
+    item.textContent = seconds > 0 ? `${seconds}s 后${label}` : `正在${label}`;
   });
 }
 
@@ -1344,6 +1357,7 @@ function labelForEvent(event) {
     "task.running": "任务运行中",
     "task.pending": "等待人工确认",
     "task.retry_scheduled": "自动重连",
+    "task.wait_scheduled": "内部等待",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
     "stage.assigned": "阶段已分配",
@@ -1388,6 +1402,9 @@ function bodyForEvent(event, payload) {
   }
   if (event.type === "task.retry_scheduled") {
     return `OpenClaw 连接异常：${payload.error || "连接中断"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动继续。`;
+  }
+  if (event.type === "task.wait_scheduled") {
+    return `内部 Agent 尚未返回：${payload.reason || "等待执行结果"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动复核。`;
   }
   if (event.type === "task.failed") {
     return payload.error || "任务失败";
@@ -1490,7 +1507,12 @@ function eventToMessage(event) {
     const points = payload.confirmationPoints || [];
     return {
       kind: "system pending",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: activeTask()?.id === (event.taskId || payload.taskId) && activeTask()?.status === "pending",
       time: event.timestamp,
+      points,
+      reason: payload.reason || "",
       body: points.length
         ? `任务等待人工确认：${points.join("；")}`
         : (payload.reason || "任务等待人工确认")
@@ -1502,7 +1524,18 @@ function eventToMessage(event) {
       kind: "system retry",
       time: event.timestamp,
       retryAt: payload.retryAt,
+      retryLabel: "自动重连",
       body: `OpenClaw 连接异常，已安排自动重连继续。${payload.error ? `原因：${payload.error}` : ""}`.trim()
+    };
+  }
+
+  if (event.type === "task.wait_scheduled") {
+    return {
+      kind: "system retry",
+      time: event.timestamp,
+      retryAt: payload.retryAt,
+      retryLabel: "自动复核",
+      body: `内部 Agent 尚未返回，已安排自动复核。${payload.reason ? `原因：${payload.reason}` : ""}`.trim()
     };
   }
 
@@ -1552,9 +1585,13 @@ function eventToMessage(event) {
 }
 
 function renderMessage(message) {
+  if (message.kind === "system pending") {
+    return renderPendingDecisionPanel(message);
+  }
+
   if (message.kind.startsWith("system")) {
     const retryCountdown = message.retryAt
-      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}">5s 后自动重连</strong>`
+      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}" data-retry-label="${escapeHtml(message.retryLabel || "自动重连")}">5s 后${escapeHtml(message.retryLabel || "自动重连")}</strong>`
       : "";
     return `
       <div class="message-system ${message.kind.includes("error") ? "error" : ""} ${message.kind.includes("pending") ? "pending" : ""} ${message.kind.includes("retry") ? "retry" : ""}">
@@ -1586,6 +1623,333 @@ function renderMessage(message) {
       </div>
     </article>
   `;
+}
+
+function renderPendingDecisionPanel(message) {
+  const points = normalizeDecisionPoints(message.points?.length ? message.points : [message.body]);
+  const actionable = message.actionable !== false;
+  if (!actionable) {
+    return renderResolvedDecisionPanel(message, points);
+  }
+  return `
+    <section class="decision-panel" data-decision-panel="${escapeHtml(message.id || "")}">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker">需要人工确认</span>
+          <strong>${points.length} 个确认点，请选择或填写</strong>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="decision-list">
+        ${points.map((point, index) => renderDecisionItem(point, index, true)).join("")}
+      </div>
+      <details class="decision-extra">
+        <summary>补充说明</summary>
+        <textarea rows="2" data-decision-extra placeholder="可选：补充无法通过选项表达的说明"></textarea>
+      </details>
+      <div class="decision-actions">
+        <button type="button" class="secondary decision-fill-button" data-decision-fill>填入聊天框</button>
+        <button type="button" class="decision-submit-button" data-decision-submit>提交确认并继续</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderResolvedDecisionPanel(message, points) {
+  return `
+    <section class="decision-panel resolved compact">
+      <details>
+        <summary class="decision-history-summary">
+          <span class="decision-kicker">历史确认点</span>
+          <strong>${points.length} 个确认点已处理</strong>
+          <time>${formatTime(message.time)}</time>
+        </summary>
+        <div class="decision-history-list">
+          ${points.map((point, index) => `
+            <div class="decision-history-item">
+              <span>${index + 1}</span>
+              <p>${escapeHtml(point.question)}</p>
+            </div>
+          `).join("")}
+        </div>
+      </details>
+    </section>
+  `;
+}
+
+function renderDecisionItem(point, index, actionable = true) {
+  const optionButtons = point.options.length
+    ? `<div class="decision-options">
+        ${point.options.map((option, optionIndex) => `
+          <button type="button" class="decision-option" data-decision-option="${index}" data-option-value="${escapeHtml(option.value)}" title="${escapeHtml(option.value)}" ${actionable ? "" : "disabled"}>
+            <span>${escapeHtml(option.label || optionLabel(optionIndex))}</span>
+            <strong>${escapeHtml(option.value)}</strong>
+          </button>
+        `).join("")}
+      </div>`
+    : "";
+  const customInput = `<input class="decision-custom-input" data-decision-custom="${index}" placeholder="${point.options.length ? "输入其他答案" : "请输入你的确认意见"}" ${actionable ? "" : "disabled"} />`;
+  const customControl = point.options.length
+    ? `<details class="decision-custom-details">
+        <summary>自定义填写</summary>
+        ${customInput}
+      </details>`
+    : customInput;
+  return `
+    <article class="decision-item" data-decision-index="${index}" data-decision-question="${escapeHtml(point.question)}">
+      <div class="decision-number">${index + 1}</div>
+      <div class="decision-content">
+        <div class="decision-question">${escapeHtml(point.question)}</div>
+        ${point.hint ? `<div class="decision-hint">${escapeHtml(point.hint)}</div>` : ""}
+        ${optionButtons}
+        ${customControl}
+      </div>
+    </article>
+  `;
+}
+
+function bindPendingDecisionPanels() {
+  els.eventsFeed.querySelectorAll("[data-decision-panel]").forEach((panel) => {
+    panel.querySelectorAll("[data-decision-option]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = button.dataset.decisionOption;
+        panel.querySelectorAll(`[data-decision-option="${index}"]`).forEach((item) => {
+          item.classList.toggle("selected", item === button);
+        });
+        const input = panel.querySelector(`[data-decision-custom="${index}"]`);
+        if (input) {
+          input.value = button.dataset.optionValue || "";
+        }
+      });
+    });
+
+    panel.querySelector("[data-decision-fill]")?.addEventListener("click", () => {
+      const content = collectDecisionPanelContent(panel);
+      if (!content) {
+        setConnection("请至少选择或填写一个确认项");
+        return;
+      }
+      els.chatMessageInput.value = content;
+      els.chatMessageInput.focus();
+    });
+
+    panel.querySelector("[data-decision-submit]")?.addEventListener("click", async () => {
+      const content = collectDecisionPanelContent(panel);
+      if (!content) {
+        setConnection("请至少选择或填写一个确认项");
+        return;
+      }
+      panel.classList.add("submitting");
+      panel.querySelectorAll("button, input, textarea").forEach((item) => {
+        item.disabled = true;
+      });
+      await submitHumanContent(content, {
+        restoreOnError: () => {
+          panel.classList.remove("submitting");
+          panel.querySelectorAll("button, input, textarea").forEach((item) => {
+            item.disabled = false;
+          });
+        }
+      });
+    });
+  });
+}
+
+function collectDecisionPanelContent(panel) {
+  const answers = [...panel.querySelectorAll("[data-decision-index]")]
+    .map((item) => {
+      const index = Number(item.dataset.decisionIndex || 0) + 1;
+      const question = item.dataset.decisionQuestion || `确认点 ${index}`;
+      const input = item.querySelector("[data-decision-custom]");
+      const answer = String(input?.value || "").trim();
+      return answer ? `${index}. ${question}: ${answer}` : "";
+    })
+    .filter(Boolean);
+  const extra = String(panel.querySelector("[data-decision-extra]")?.value || "").trim();
+  if (extra) {
+    answers.push(`补充说明: ${extra}`);
+  }
+  return answers.length ? `人工确认结果:\n${answers.join("\n")}` : "";
+}
+
+function normalizeDecisionPoints(points) {
+  const normalized = points
+    .flatMap(splitConfirmationText)
+    .map(parseDecisionPoint)
+    .filter((point) => point.question || point.hint);
+
+  return normalized.length
+    ? normalized
+    : [{ question: "确认意见", hint: "", options: [] }];
+}
+
+function splitConfirmationText(value) {
+  return String(value || "")
+    .replace(/^任务等待人工确认[:：]?/, "")
+    .split(/\n+|[；;]/)
+    .map((item) => item.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean);
+}
+
+function parseDecisionPoint(value) {
+  const text = String(value || "").trim();
+  const colonIndex = firstColonIndex(text);
+  const hasShortLabel = colonIndex > 0 && colonIndex <= 14;
+  const question = hasShortLabel
+    ? text.slice(0, colonIndex).trim()
+    : shortQuestionFromText(text);
+  const rawHint = hasShortLabel
+    ? text.slice(colonIndex + 1).trim()
+    : text;
+  const hint = cleanDecisionHint(question, rawHint);
+  return {
+    question: question || "确认点",
+    hint,
+    options: extractDecisionOptions(question, hint)
+  };
+}
+
+function firstColonIndex(value) {
+  const zh = value.indexOf("：");
+  const en = value.indexOf(":");
+  if (zh < 0) {
+    return en;
+  }
+  if (en < 0) {
+    return zh;
+  }
+  return Math.min(zh, en);
+}
+
+function shortQuestionFromText(value) {
+  const cleaned = String(value || "").trim();
+  const questionMark = cleaned.search(/[？?]/);
+  if (questionMark > 0 && questionMark <= 28) {
+    return cleaned.slice(0, questionMark + 1);
+  }
+  const comma = cleaned.search(/[，,]/);
+  if (comma > 0 && comma <= 16) {
+    return cleaned.slice(0, comma);
+  }
+  return cleaned.length > 26 ? `${cleaned.slice(0, 26)}...` : cleaned;
+}
+
+function cleanDecisionHint(question, hint) {
+  let value = String(hint || "").trim();
+  const title = String(question || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (title && normalizeDecisionText(value) === normalizeDecisionText(title)) {
+    return "";
+  }
+  if (title && value.startsWith(title)) {
+    value = value.slice(title.length).replace(/^[\s，,。:：？?]+/, "").trim();
+  }
+  if (title && normalizeDecisionText(value) === normalizeDecisionText(title)) {
+    return "";
+  }
+  return value;
+}
+
+function normalizeDecisionText(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[。？?：:，,]/g, "")
+    .toLowerCase();
+}
+
+function extractDecisionOptions(question, hint) {
+  const text = `${question || ""} ${hint || ""}`.trim();
+  const planOptions = extractPlanOptions(text);
+  if (planOptions.length > 0) {
+    return planOptions;
+  }
+
+  const eitherOptions = extractEitherOptions(hint);
+  if (eitherOptions.length > 0) {
+    return eitherOptions;
+  }
+
+  const code = text.match(/(?:建议编码|编码)\s*([A-Z]{2,}_[A-Z0-9_]+)/i)?.[1];
+  if (code) {
+    return [
+      { label: "A", value: `采用建议编码 ${code}` },
+      { label: "B", value: "使用既定编码（见自定义填写）" }
+    ];
+  }
+
+  if (/是否|需不需要|要不要|是否需要/.test(text)) {
+    const positive = /录入节点|_I/.test(text) ? "需要录入节点" : "需要";
+    const negative = /录入节点|_I/.test(text) ? "不需要录入节点" : "不需要";
+    return [
+      { label: "A", value: positive },
+      { label: "B", value: negative }
+    ];
+  }
+
+  return [];
+}
+
+function extractPlanOptions(text) {
+  const parts = String(text || "")
+    .split(/(?=方案\s*[A-DＡ-Ｄ]\s*[:：]?)/i)
+    .map((part) => part.trim())
+    .filter((part) => /^方案\s*[A-DＡ-Ｄ]/i.test(part));
+  if (parts.length < 2) {
+    return [];
+  }
+  return parts.slice(0, 4).map((part, index) => {
+    const label = part.match(/^方案\s*([A-DＡ-Ｄ])/i)?.[1] || optionLabel(index);
+    const value = part
+      .replace(/^方案\s*[A-DＡ-Ｄ]\s*[:：]?/i, "")
+      .replace(/[\/|]+$/, "")
+      .trim();
+    return { label: normalizeOptionLabel(label), value: value || part };
+  });
+}
+
+function extractEitherOptions(hint) {
+  const text = String(hint || "").trim();
+  if (!/还是/.test(text)) {
+    return [];
+  }
+  const [leftRaw, rightRaw] = text.split(/，?还是/);
+  if (!leftRaw || !rightRaw) {
+    return [];
+  }
+  const left = cleanInlineOptionText(leftRaw, "left");
+  const right = cleanInlineOptionText(rightRaw, "right");
+  return [left, right]
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((value, index) => ({ label: optionLabel(index), value }));
+}
+
+function cleanInlineOptionText(value, side = "left") {
+  let text = String(value || "").trim();
+  if (side === "left") {
+    text = text.replace(/^.*[？?]\s*/, "");
+  }
+  return text
+    .replace(/^.*(?:：|:)\s*/, "")
+    .replace(/[？?。；;，,].*$/, "")
+    .replace(/^[\s/｜|]+|[\s/｜|]+$/g, "")
+    .trim();
+}
+
+function optionLabel(index) {
+  return ["A", "B", "C", "D"][index] || String(index + 1);
+}
+
+function normalizeOptionLabel(label) {
+  const value = String(label || "").toUpperCase();
+  return ({
+    "Ａ": "A",
+    "Ｂ": "B",
+    "Ｃ": "C",
+    "Ｄ": "D"
+  })[value] || value;
 }
 
 function bindMessageToggles() {
