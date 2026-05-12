@@ -19,7 +19,8 @@ const state = {
   promptDefaults: null,
   promptPlaceholders: [],
   source: null,
-  sourceRoomId: ""
+  sourceRoomId: "",
+  activePromptTemplateKey: localStorage.getItem("teamroom.activePromptTemplateKey") || "supervisorDispatch"
 };
 
 let retryCountdownTimer = null;
@@ -41,6 +42,90 @@ const PROMPT_TEMPLATE_KEYS = [
   "previousOutputItem",
   "roomContextItem",
   "taskMessageItem"
+];
+
+const PROMPT_TEMPLATE_META = [
+  {
+    key: "supervisorDispatch",
+    title: "Supervisor 派工",
+    group: "主模板",
+    tone: "需求分析与任务拆解",
+    description: "TeamRoom 首次接收用户需求后，发送给总控 Agent，用于判断影响范围并输出可解析派工 JSON。",
+    textarea: "supervisorDispatchTemplateInput"
+  },
+  {
+    key: "specialistWork",
+    title: "Specialist 执行",
+    group: "主模板",
+    tone: "专业子 Agent 处理",
+    description: "总控派出子任务后，发送给专业 Agent，包含原始需求、派工理由、前序输出与人工补充。",
+    textarea: "specialistWorkTemplateInput"
+  },
+  {
+    key: "supervisorReview",
+    title: "Supervisor 终审",
+    group: "主模板",
+    tone: "汇总审核与人工确认判定",
+    description: "所有子 Agent 返回后，发送给总控 Agent，用于最终审核、判断 completed / pending / waiting。",
+    textarea: "supervisorReviewTemplateInput"
+  },
+  {
+    key: "previousOutputItem",
+    title: "前序输出拼接",
+    group: "拼接子模板",
+    tone: "agent 间上下文传递",
+    description: "控制 TeamRoom 如何把前一个阶段的输出拼进后续 Agent 的 prompt。",
+    textarea: "previousOutputItemTemplateInput"
+  },
+  {
+    key: "roomContextItem",
+    title: "历史任务拼接",
+    group: "拼接子模板",
+    tone: "协作室长期上下文",
+    description: "控制已完成历史任务如何进入当前任务 prompt，影响跨任务记忆的表达方式。",
+    textarea: "roomContextItemTemplateInput"
+  },
+  {
+    key: "taskMessageItem",
+    title: "人工消息拼接",
+    group: "拼接子模板",
+    tone: "人类补充与干预",
+    description: "控制中间聊天窗里人工补充、确认点回复、继续任务指令如何进入后续 prompt。",
+    textarea: "taskMessageItemTemplateInput"
+  }
+];
+
+const PROMPT_VARIABLE_GUIDE = [
+  ["agentName", "当前被调用的 OpenClaw Agent 展示名称。"],
+  ["agentId", "当前被调用的 Agent ID，用于派发子任务和标记输出来源。"],
+  ["roomName", "当前协作室名称。"],
+  ["roomMembers", "当前协作室里的 Agent 成员清单，包含角色标签、能力标签和可调度状态。"],
+  ["goal", "用户发布的当前任务原始需求。"],
+  ["roomContext", "协作室共享历史上下文，会按配置注入最近任务摘要。"],
+  ["taskMessages", "当前任务里，人类在中间聊天窗补充、干预、确认的信息。"],
+  ["previousOutputs", "当前任务已完成阶段的 Agent 输出汇总。"],
+  ["memberRoles", "当前被调用 Agent 的角色标签。"],
+  ["memberCapabilities", "当前被调用 Agent 的专业能力标签。"],
+  ["stageTitle", "当前派发阶段的标题。"],
+  ["stageType", "当前阶段类型，供模板区分派工、执行、复核等阶段。"],
+  ["stageGoal", "总控派给当前子 Agent 的具体阶段目标。"],
+  ["stageNeeds", "当前阶段需要的能力标签。"],
+  ["stageReason", "总控把任务派给该 Agent 的原因。"],
+  ["resumeInstruction", "任务中断后继续执行时注入的续跑说明。"],
+  ["dispatchJsonContract", "Supervisor 派工阶段必须遵守的机器可读 JSON 输出格式。"],
+  ["reviewJsonContract", "Supervisor 终审阶段必须遵守的机器可读 JSON 输出格式。"],
+  ["supervisorExtraPrompt", "协作策略里追加给总控阶段的自定义提示。"],
+  ["specialistExtraPrompt", "协作策略里追加给专业子 Agent 阶段的自定义提示。"],
+  ["reviewExtraPrompt", "协作策略里追加给总控终审阶段的自定义提示。"],
+  ["fallbackWarning", "JSON 解析失败且未开启兜底派工时，注入给总控的提醒。"],
+  ["index", "拼接列表中的序号，常用于历史任务或前序输出模板。"],
+  ["title", "前序阶段或输出标题。"],
+  ["summary", "历史任务摘要或前序阶段输出摘要。"],
+  ["status", "历史任务状态。"],
+  ["completedAt", "历史任务完成时间。"],
+  ["timestamp", "人工消息发生时间。"],
+  ["author", "人工消息作者。"],
+  ["content", "人工消息正文。"]
 ];
 
 const STAGE_TITLE_LABELS = {
@@ -114,12 +199,16 @@ const els = {
   configRoomContextLimitInput: document.querySelector("#configRoomContextLimitInput"),
   configTaskMessageLimitInput: document.querySelector("#configTaskMessageLimitInput"),
   promptPlaceholders: document.querySelector("#promptPlaceholders"),
+  promptVariableGuide: document.querySelector("#promptVariableGuide"),
+  promptTemplateSummary: document.querySelector("#promptTemplateSummary"),
+  promptTemplateNav: document.querySelector("#promptTemplateNav"),
   supervisorDispatchTemplateInput: document.querySelector("#supervisorDispatchTemplateInput"),
   specialistWorkTemplateInput: document.querySelector("#specialistWorkTemplateInput"),
   supervisorReviewTemplateInput: document.querySelector("#supervisorReviewTemplateInput"),
   previousOutputItemTemplateInput: document.querySelector("#previousOutputItemTemplateInput"),
   roomContextItemTemplateInput: document.querySelector("#roomContextItemTemplateInput"),
   taskMessageItemTemplateInput: document.querySelector("#taskMessageItemTemplateInput"),
+  resetCurrentPromptTemplateButton: document.querySelector("#resetCurrentPromptTemplateButton"),
   resetPolicyTemplatesButton: document.querySelector("#resetPolicyTemplatesButton"),
   savePolicyConfigButton: document.querySelector("#savePolicyConfigButton"),
   tokenInput: document.querySelector("#tokenInput"),
@@ -209,7 +298,22 @@ els.savePolicyConfigButton.addEventListener("click", async () => {
 
 els.resetPolicyTemplatesButton.addEventListener("click", () => {
   fillPromptTemplateInputs(state.promptDefaults || {});
+  renderPromptTemplateNav();
   setConfigStatus("已填入默认模板，点击保存后生效");
+});
+
+els.resetCurrentPromptTemplateButton.addEventListener("click", () => {
+  resetCurrentPromptTemplate();
+});
+
+PROMPT_TEMPLATE_META.forEach((meta) => {
+  const textarea = els[meta.textarea];
+  textarea?.addEventListener("focus", () => {
+    setActivePromptTemplate(meta.key);
+  });
+  textarea?.addEventListener("input", () => {
+    renderPromptTemplateNav();
+  });
 });
 
 els.roomForm.addEventListener("submit", async (event) => {
@@ -321,7 +425,7 @@ async function refreshAll() {
 
 async function openConfigView() {
   state.configOpen = true;
-  state.configRoomId = state.configRoomId || state.activeRoomId || state.rooms[0]?.id || "";
+  state.configRoomId = state.activeRoomId || state.configRoomId || state.rooms[0]?.id || "";
   state.configAgentId = state.configAgentId || state.agents[0]?.id || "";
   els.shell.classList.add("config-open");
   els.configView.classList.remove("hidden");
@@ -1021,6 +1125,7 @@ function renderTeamRoomConfigForm() {
   els.configTaskMessageLimitInput.value = Number(policy.taskMessageLimit ?? 12);
   fillPromptTemplateInputs(templates);
   renderPromptPlaceholders();
+  renderPromptTemplateNav();
 
   const disabled = !room;
   [
@@ -1034,6 +1139,7 @@ function renderTeamRoomConfigForm() {
     els.previousOutputItemTemplateInput,
     els.roomContextItemTemplateInput,
     els.taskMessageItemTemplateInput,
+    els.resetCurrentPromptTemplateButton,
     els.resetPolicyTemplatesButton,
     els.savePolicyConfigButton
   ].forEach((element) => {
@@ -1054,6 +1160,127 @@ function renderPromptPlaceholders() {
   els.promptPlaceholders.innerHTML = state.promptPlaceholders.map((name) => (
     `<code>{{${escapeHtml(name)}}}</code>`
   )).join("");
+  renderPromptVariableGuide();
+}
+
+function renderPromptVariableGuide() {
+  if (!els.promptVariableGuide) {
+    return;
+  }
+  const serverPlaceholders = new Set(state.promptPlaceholders || []);
+  const variables = PROMPT_VARIABLE_GUIDE.filter(([name]) => (
+    serverPlaceholders.size === 0 || serverPlaceholders.has(name) || [
+      "memberRoles",
+      "memberCapabilities",
+      "stageType",
+      "reviewJsonContract",
+      "index",
+      "title",
+      "summary",
+      "status",
+      "completedAt",
+      "timestamp",
+      "author",
+      "content"
+    ].includes(name)
+  ));
+  els.promptVariableGuide.innerHTML = `
+    <div class="variable-guide-head">
+      <h4>变量说明</h4>
+      <p>保存后，TeamRoom 会在发送给 Agent 前自动替换这些占位符。</p>
+    </div>
+    <dl>
+      ${variables.map(([name, description]) => `
+        <div>
+          <dt><code>{{${escapeHtml(name)}}}</code></dt>
+          <dd>${escapeHtml(description)}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
+}
+
+function renderPromptTemplateNav() {
+  const active = promptTemplateMeta(state.activePromptTemplateKey) || PROMPT_TEMPLATE_META[0];
+  state.activePromptTemplateKey = active.key;
+  const changedCount = PROMPT_TEMPLATE_META.filter((meta) => isPromptTemplateChanged(meta.key)).length;
+  if (els.promptTemplateSummary) {
+    els.promptTemplateSummary.innerHTML = `
+      <span>${changedCount} / ${PROMPT_TEMPLATE_META.length} 已微调</span>
+      <strong>${escapeHtml(active.title)}</strong>
+      <em>${escapeHtml(active.description)}</em>
+    `;
+  }
+  if (els.promptTemplateNav) {
+    els.promptTemplateNav.innerHTML = PROMPT_TEMPLATE_META.map((meta) => {
+      const changed = isPromptTemplateChanged(meta.key);
+      return `
+        <button type="button" class="${meta.key === active.key ? "active" : ""}" data-prompt-template-key="${escapeHtml(meta.key)}">
+          <span>${escapeHtml(meta.group)}</span>
+          <strong>${escapeHtml(meta.title)}</strong>
+          <em>${escapeHtml(meta.tone)}</em>
+          <small>${changed ? "已微调" : "默认"}</small>
+        </button>
+      `;
+    }).join("");
+    els.promptTemplateNav.querySelectorAll("[data-prompt-template-key]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setActivePromptTemplate(button.dataset.promptTemplateKey, { focus: true });
+      });
+    });
+  }
+  document.querySelectorAll("[data-template-key]").forEach((card) => {
+    const key = card.dataset.templateKey;
+    const isActive = key === active.key;
+    card.hidden = !isActive;
+    card.setAttribute("aria-hidden", String(!isActive));
+    card.classList.toggle("active", isActive);
+    card.classList.toggle("changed", isPromptTemplateChanged(key));
+  });
+}
+
+function setActivePromptTemplate(key, { focus = false } = {}) {
+  const meta = promptTemplateMeta(key);
+  if (!meta) {
+    return;
+  }
+  state.activePromptTemplateKey = meta.key;
+  localStorage.setItem("teamroom.activePromptTemplateKey", meta.key);
+  renderPromptTemplateNav();
+  const card = document.querySelector(`[data-template-key="${cssEscape(meta.key)}"]`);
+  if (focus && card) {
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    els[meta.textarea]?.focus();
+  }
+}
+
+function resetCurrentPromptTemplate() {
+  const meta = promptTemplateMeta(state.activePromptTemplateKey);
+  if (!meta || !state.promptDefaults) {
+    return;
+  }
+  const textarea = els[meta.textarea];
+  if (!textarea) {
+    return;
+  }
+  textarea.value = state.promptDefaults[meta.key] || "";
+  renderPromptTemplateNav();
+  setConfigStatus(`${meta.title} 已恢复默认，点击保存后生效`);
+  textarea.focus();
+}
+
+function promptTemplateMeta(key) {
+  return PROMPT_TEMPLATE_META.find((meta) => meta.key === key);
+}
+
+function isPromptTemplateChanged(key) {
+  const meta = promptTemplateMeta(key);
+  if (!meta) {
+    return false;
+  }
+  const current = String(els[meta.textarea]?.value || "").trim();
+  const original = String(state.promptDefaults?.[key] || "").trim();
+  return current !== original;
 }
 
 function readTeamRoomConfigForm(existingPolicy = {}) {
@@ -2065,7 +2292,7 @@ function escapeHtml(value) {
 }
 
 function renderMarkdown(markdown) {
-  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const lines = normalizeTeamRoomJsonBlocks(markdown).split("\n");
   const html = [];
   let paragraph = [];
   let list = null;
@@ -2194,6 +2421,50 @@ function renderMarkdown(markdown) {
   }
   closeBlocks();
   return html.join("");
+}
+
+function normalizeTeamRoomJsonBlocks(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const normalized = [];
+  let inFence = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const fence = line.match(/^```(?:\w+)?\s*$/);
+    if (fence) {
+      inFence = !inFence;
+      normalized.push(line);
+      continue;
+    }
+
+    const start = line.trim().match(/^TEAMROOM_([A-Z_]+)_JSON_START$/);
+    if (!inFence && start) {
+      const blockType = start[1];
+      const block = [line.trim()];
+      i += 1;
+      while (i < lines.length) {
+        const current = lines[i];
+        block.push(current);
+        if (current.trim() === `TEAMROOM_${blockType}_JSON_END`) {
+          break;
+        }
+        i += 1;
+      }
+
+      if (normalized.length && normalized[normalized.length - 1].trim()) {
+        normalized.push("");
+      }
+      normalized.push("```json", ...block, "```");
+      if (i < lines.length - 1 && lines[i + 1]?.trim()) {
+        normalized.push("");
+      }
+      continue;
+    }
+
+    normalized.push(line);
+  }
+
+  return normalized.join("\n");
 }
 
 function isMarkdownTableStart(line, separatorLine) {

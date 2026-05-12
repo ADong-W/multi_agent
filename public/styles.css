@@ -2239,20 +2239,33 @@ details[open] > summary .summary-caret {
 }
 
 #teamroomPolicyPanel {
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto 86px minmax(0, 1fr);
+  overflow: hidden;
 }
 
 #teamroomPolicyPanel .config-toolbar {
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
 }
 
+.prompt-policy-panel {
+  gap: 12px;
+}
+
+.prompt-policy-panel .config-panel-head {
+  align-items: center;
+}
+
+.policy-hidden-settings {
+  display: none !important;
+}
+
 .placeholder-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-height: 72px;
+  max-height: 48px;
   overflow: auto;
-  padding: 8px;
+  padding: 6px 8px;
   border: 1px dashed var(--border);
   border-radius: 18px;
   background: var(--surface-quiet);
@@ -2267,25 +2280,305 @@ details[open] > summary .summary-caret {
   box-shadow: var(--shadow-inset);
 }
 
-.template-grid {
+.prompt-template-control {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) minmax(180px, 230px);
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #ffffff;
+  min-height: 0;
+  height: 86px;
+  overflow: hidden;
+}
+
+.prompt-template-intro {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.prompt-template-intro strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.prompt-template-intro p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.36;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.prompt-template-summary {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-quiet);
+  padding: 8px 10px;
+  height: 100%;
+}
+
+.prompt-template-summary span,
+.prompt-template-summary em {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-summary strong {
+  overflow: hidden;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-nav {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px;
+  scrollbar-width: thin;
+}
+
+.prompt-template-nav button {
+  display: grid;
+  flex: 0 0 154px;
+  min-height: 62px;
+  height: 64px;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 7px 9px;
+  text-align: left;
+  box-shadow: none;
+}
+
+.prompt-template-nav button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.prompt-template-nav button span,
+.prompt-template-nav button em,
+.prompt-template-nav button small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-nav button strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-nav button small {
+  justify-self: start;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: var(--surface-quiet);
+  padding: 2px 7px;
+}
+
+.prompt-template-nav button.active small {
+  background: #ffffff;
+  color: var(--accent-strong);
+}
+
+.template-workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  overflow: auto;
-  padding-right: 4px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
+  gap: 12px;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.template-grid {
+  min-height: 0;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  padding-right: 0;
 }
 
 .template-grid .field-label {
   min-height: 0;
 }
 
+.template-card {
+  position: relative;
+  display: none;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  padding: 12px;
+  background: var(--surface-quiet);
+}
+
+.template-card.active {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+  border-color: var(--accent);
+  background: #ffffff;
+}
+
+.template-card.changed::after {
+  content: "已微调";
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.template-card > span {
+  margin-bottom: 10px;
+  padding-right: 72px;
+}
+
+.template-card b {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.template-card small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .template-editor {
-  height: 320px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
 }
 
 .small-template-editor {
-  height: 150px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  resize: none;
+}
+
+.prompt-variable-guide {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.variable-guide-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -12px -12px 8px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.94);
+  padding: 12px;
+  backdrop-filter: blur(16px);
+}
+
+.variable-guide-head h4,
+.variable-guide-head p {
+  margin: 0;
+}
+
+.variable-guide-head h4 {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.variable-guide-head p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.42;
+}
+
+.prompt-variable-guide dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.prompt-variable-guide dl > div {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.prompt-variable-guide dl > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.prompt-variable-guide dt,
+.prompt-variable-guide dd {
+  margin: 0;
+}
+
+.prompt-variable-guide code {
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.prompt-variable-guide dd {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 @media (max-height: 820px) {
@@ -2371,6 +2664,14 @@ details[open] > summary .summary-caret {
   #teamroomPolicyPanel .config-toolbar,
   .template-grid {
     grid-template-columns: 1fr;
+  }
+
+  .template-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-variable-guide {
+    max-height: 360px;
   }
 
   .config-editor {

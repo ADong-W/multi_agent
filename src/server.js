@@ -99,19 +99,31 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
         "roomName",
         "roomMembers",
         "goal",
+        "memberRoles",
+        "memberCapabilities",
         "roomContext",
         "taskMessages",
         "previousOutputs",
         "stageTitle",
+        "stageType",
         "stageGoal",
         "stageNeeds",
         "stageReason",
         "resumeInstruction",
         "dispatchJsonContract",
+        "reviewJsonContract",
         "supervisorExtraPrompt",
         "specialistExtraPrompt",
         "reviewExtraPrompt",
-        "fallbackWarning"
+        "fallbackWarning",
+        "index",
+        "title",
+        "summary",
+        "status",
+        "completedAt",
+        "timestamp",
+        "author",
+        "content"
       ]
     });
     return;

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>实施设计 Agent 协作驾驶舱</title>
-    <link rel="stylesheet" href="/styles.css?v=20260509-pending-filter-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260512-dev2-template-layout-2" />
   </head>
   <body>
     <div class="shell">
@@ -124,18 +124,19 @@
             <textarea id="agentFileEditor" class="config-editor" spellcheck="false" placeholder="选择 agent 和文件后加载内容"></textarea>
           </section>
 
-          <section id="teamroomPolicyPanel" class="config-panel hidden">
+          <section id="teamroomPolicyPanel" class="config-panel prompt-policy-panel hidden">
             <div class="config-panel-head">
               <div>
                 <h3>TeamRoom 协作模板</h3>
                 <p>配置总控职责、上下文拼接方式、前序 agent 输出如何进入后续 prompt。</p>
               </div>
               <div class="config-actions">
+                <button id="resetCurrentPromptTemplateButton" type="button" class="secondary-button">恢复当前模板</button>
                 <button id="resetPolicyTemplatesButton" type="button" class="secondary-button">恢复默认模板</button>
                 <button id="savePolicyConfigButton" type="button">保存协作配置</button>
               </div>
             </div>
-            <div class="config-toolbar">
+            <div class="config-toolbar policy-hidden-settings">
               <label class="field-label">
                 <span>协作室</span>
                 <select id="configRoomSelect"></select>
@@ -153,7 +154,7 @@
                 <span>非 Supervisor 模式启用复核（Supervisor 固定总控终审）</span>
               </label>
             </div>
-            <div class="config-grid">
+            <div class="config-grid policy-hidden-settings">
               <label class="field-label">
                 <span>历史任务注入数</span>
                 <input id="configRoomContextLimitInput" type="number" min="0" max="20" />
@@ -163,37 +164,66 @@
                 <input id="configTaskMessageLimitInput" type="number" min="0" max="50" />
               </label>
             </div>
-            <div id="promptPlaceholders" class="placeholder-strip"></div>
-            <div class="template-grid">
-              <label class="field-label">
-                <span>Supervisor 派工 prompt 模板</span>
-                <textarea id="supervisorDispatchTemplateInput" class="template-editor" spellcheck="false"></textarea>
-              </label>
-              <label class="field-label">
-                <span>Specialist 执行 prompt 模板</span>
-                <textarea id="specialistWorkTemplateInput" class="template-editor" spellcheck="false"></textarea>
-              </label>
-              <label class="field-label">
-                <span>Supervisor 复核 prompt 模板</span>
-                <textarea id="supervisorReviewTemplateInput" class="template-editor" spellcheck="false"></textarea>
-              </label>
-              <label class="field-label">
-                <span>前序 agent 输出拼接模板</span>
-                <textarea id="previousOutputItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-              </label>
-              <label class="field-label">
-                <span>协作室历史任务拼接模板</span>
-                <textarea id="roomContextItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-              </label>
-              <label class="field-label">
-                <span>人工补充消息拼接模板</span>
-                <textarea id="taskMessageItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-              </label>
+            <div id="promptPlaceholders" class="placeholder-strip policy-hidden-settings"></div>
+            <div class="prompt-template-control">
+              <div class="prompt-template-intro">
+                <strong>Prompt 模板调优</strong>
+                <p>选择上方模板卡片后，下方会展开一个大编辑器。主模板决定派工、执行、终审；拼接子模板决定上下文如何传给下一个 Agent。</p>
+              </div>
+              <div id="promptTemplateSummary" class="prompt-template-summary"></div>
+              <div id="promptTemplateNav" class="prompt-template-nav"></div>
+            </div>
+            <div class="template-workspace">
+              <div class="template-grid">
+                <label class="field-label template-card" data-template-key="supervisorDispatch">
+                  <span>
+                    <b>Supervisor 派工 prompt 模板</b>
+                    <small>主模板 · 首次需求分析与任务拆解</small>
+                  </span>
+                  <textarea id="supervisorDispatchTemplateInput" class="template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card" data-template-key="specialistWork">
+                  <span>
+                    <b>Specialist 执行 prompt 模板</b>
+                    <small>主模板 · 专业子 Agent 执行</small>
+                  </span>
+                  <textarea id="specialistWorkTemplateInput" class="template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card" data-template-key="supervisorReview">
+                  <span>
+                    <b>Supervisor 复核 prompt 模板</b>
+                    <small>主模板 · 汇总审核与人工确认判定</small>
+                  </span>
+                  <textarea id="supervisorReviewTemplateInput" class="template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card compact-template-card" data-template-key="previousOutputItem">
+                  <span>
+                    <b>前序 agent 输出拼接模板</b>
+                    <small>拼接子模板 · agent 间上下文传递</small>
+                  </span>
+                  <textarea id="previousOutputItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card compact-template-card" data-template-key="roomContextItem">
+                  <span>
+                    <b>协作室历史任务拼接模板</b>
+                    <small>拼接子模板 · 历史任务记忆</small>
+                  </span>
+                  <textarea id="roomContextItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card compact-template-card" data-template-key="taskMessageItem">
+                  <span>
+                    <b>人工补充消息拼接模板</b>
+                    <small>拼接子模板 · 聊天干预与确认点回复</small>
+                  </span>
+                  <textarea id="taskMessageItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
+                </label>
+              </div>
+              <aside id="promptVariableGuide" class="prompt-variable-guide" aria-label="Prompt 变量说明"></aside>
             </div>
           </section>
         </div>
       </section>
     </div>
-    <script type="module" src="/app.js?v=20260509-pending-filter-1"></script>
+    <script type="module" src="/app.js?v=20260512-dev2-template-guide-1"></script>
   </body>
 </html>
