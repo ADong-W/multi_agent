@@ -94,6 +94,51 @@ export const DEFAULT_PROMPT_TEMPLATES = {
     "{{reviewExtraPrompt}}"
   ].join("\n"),
 
+  dispatchJsonContract: [
+    "重要约束:",
+    "- TeamRoom 只负责协作管控和可视化，业务拆题权在你这里。",
+    "- 只从上面的可调度成员中选择 agent_id。",
+    "- 不要为了热闹而安排无关 agent；如果某类交付件不受影响，可以不安排。",
+    "- 如果无法判断需要哪个专业 agent，请返回空的 subtasks；只有当缺口必须由 BA、业务方或用户补充时，才写入 confirmation_points。",
+    "- confirmation_points 只写人类可决策问题；不要写“等待 agent 返回”“后续派发某 agent”“执行中/验证中”这类内部流程状态。",
+    "",
+    "请在回答中包含下面这个机器可读 JSON 块，TeamRoom 会据此派发子任务:",
+    "TEAMROOM_DISPATCH_JSON_START",
+    JSON.stringify({
+      summary: "一句话说明需求和影响范围",
+      subtasks: [
+        {
+          agent_id: "agent_2",
+          title: "维度与模型影响分析",
+          goal: "说明要交给该 agent 的具体任务",
+          needs: ["dimension", "model"],
+          reason: "为什么需要该 agent 参与"
+        }
+      ],
+      confirmation_points: ["需要人工确认的问题"]
+    }, null, 2),
+    "TEAMROOM_DISPATCH_JSON_END"
+  ].join("\n"),
+
+  reviewJsonContract: [
+    "重要输出要求:",
+    "- 你是本次任务最后的审核人。",
+    "- 只有当最终结论中存在必须由 BA、业务方、用户或人工做业务决策/事实补充的信息缺口时，任务才不能自动完成。",
+    "- 这种情况下请把 status 设为 pending，并只把人类可回答的问题写入 confirmation_points。",
+    "- 不要把内部流程状态写入 confirmation_points，例如: 等待某个 agent 返回、某个 agent 正在执行、验证未结束、后续需要派发 form_agent / permission_agent。",
+    "- 如果只是内部 agent 尚未返回或需要继续观察，请把 status 设为 waiting，confirmation_points 为空数组，TeamRoom 会自动继续复核。",
+    "- 如果没有任何人工确认点，请把 status 设为 completed，confirmation_points 为空数组。",
+    "",
+    "请在回答末尾包含下面这个机器可读 JSON 块，TeamRoom 会据此判断任务是否完成:",
+    "TEAMROOM_REVIEW_JSON_START",
+    JSON.stringify({
+      status: "completed",
+      summary: "一句话最终审核结论",
+      confirmation_points: []
+    }, null, 2),
+    "TEAMROOM_REVIEW_JSON_END"
+  ].join("\n"),
+
   previousOutputItem: [
     "## {{title}} by {{agentId}}",
     "{{summary}}"

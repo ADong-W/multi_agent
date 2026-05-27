@@ -9,7 +9,7 @@ OpenClaw TeamRoom 是一个面向 OpenClaw 风格 agent 工作区的轻量级多
 - 不需要 Next.js 运行时
 - MVP 阶段没有外部 npm 依赖
 - 静态 Web UI 由同一个 Node 进程提供
-- OpenClaw adapter 可替换
+- OpenClaw / OpenCode adapter 可替换
 
 ## 为什么需要它
 
@@ -94,6 +94,50 @@ http://127.0.0.1:<你设置的端口>
 http://127.0.0.1:8786
 ```
 
+## 连接你本地的 OpenCode
+
+如果公司侧不能使用 OpenClaw，但可以运行 [OpenCode](https://opencode.ai/docs/server/)，TeamRoom 也可以通过 `TEAMROOM_ADAPTER=opencode` 把底层执行后端切到 OpenCode。
+
+1. 在希望 agent 工作的项目目录里启动 OpenCode server。这个命令启动的是 OpenCode 后端/API，不是 TeamRoom 前端界面：
+
+```bash
+cd <希望 opencode agents 操作的项目目录>
+opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+2. 另开一个终端启动 TeamRoom。这个命令必须在 TeamRoom 项目目录里执行，因为 `npm start` 要读取这个仓库里的 `package.json`：
+
+```bash
+cd xxx/multi_agent
+TEAMROOM_PORT=<你自己设置一个4位数的端口用于给当前项目使用> \
+TEAMROOM_ADAPTER=opencode \
+OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+3. 打开 TeamRoom 前端，而不是 OpenCode server 地址：
+
+```text
+http://127.0.0.1:<你设置的teamroom端口>
+```
+
+比如你设置的是 `TEAMROOM_PORT=8786`，就打开：
+
+```text
+http://127.0.0.1:8786
+```
+
+如果需要指定模型，可以加：
+
+```bash
+OPENCODE_PROVIDER=anthropic \
+OPENCODE_MODEL=claude-sonnet-4-5 \
+TEAMROOM_ADAPTER=opencode \
+npm start
+```
+
+TeamRoom 会调用 OpenCode 的 `/agent`、`/session`、`/session/{sessionID}/message`。默认同一个协作室里的同一个 agent 会复用一个 OpenCode session，从而保留房间内上下文。如果你直接打开 `http://127.0.0.1:4096`，进入的是 OpenCode 自己的 server 页面，不是 TeamRoom 前端。
+
 ## OpenClaw 集成方式
 
 实现里保留了一个很窄的 adapter 边界：
@@ -104,7 +148,7 @@ TeamRoom core
   -> adapter.runAgent(agentId, input, context)
 ```
 
-在真实 OpenClaw 部署中，可以在 `src/adapters/openclaw-http.js` 中实现这两个调用，或者从 OpenClaw native plugin 中挂载 TeamRoom core。房间、策略、状态和 UI 代码都不需要改变。
+真实后端部署时，只要在 adapter 里实现这两个调用即可，例如 `src/adapters/openclaw-http.js` 或 `src/adapters/opencode.js`。房间、策略、状态和 UI 代码都不需要改变。
 
 ## Agent 标签画像
 
@@ -172,6 +216,17 @@ npm start
 
 这个模式会从 `/v1/models` 发现现有 OpenClaw agents，然后通过 `/v1/responses` 调用选中的 agent，使用的 model 名称是 `openclaw/<agentId>`。
 
+OpenCode server 模式：
+
+```bash
+cd xxx/multi_agent
+TEAMROOM_ADAPTER=opencode \
+OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+这个模式需要先启动 `opencode serve`。TeamRoom 会从 `/agent` 发现 OpenCode agents，通过 `/session` 创建或复用 session，并通过 `/session/{sessionID}/message` 发送阶段 prompt。浏览器要打开 TeamRoom 的端口，例如 `http://127.0.0.1:8787`，不要打开 OpenCode 的 `4096` 端口。
+
 常用环境变量：
 
 ```text
@@ -179,7 +234,7 @@ TEAMROOM_HOST=127.0.0.1
 TEAMROOM_PORT=8787
 TEAMROOM_DATA_FILE=./data/teamroom.json
 TEAMROOM_TOKEN=optional-shared-token
-TEAMROOM_ADAPTER=mock | openclaw-gateway | openclaw-http | openclaw-responses
+TEAMROOM_ADAPTER=mock | opencode | openclaw-gateway | openclaw-http | openclaw-responses
 OPENCLAW_BASE_URL=http://127.0.0.1:3000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_DEVICE_FILE=./data/openclaw-device.json
@@ -191,6 +246,14 @@ OPENCLAW_MODELS_PATH=/v1/models
 OPENCLAW_RESPONSES_PATH=/v1/responses
 OPENCLAW_TOKEN=optional-openclaw-token
 OPENCLAW_PASSWORD=optional-openclaw-password
+OPENCODE_BASE_URL=http://127.0.0.1:4096
+OPENCODE_DIRECTORY=optional-project-directory
+OPENCODE_WORKSPACE=optional-opencode-workspace
+OPENCODE_PROVIDER=optional-provider-id
+OPENCODE_MODEL=optional-model-id
+OPENCODE_VARIANT=optional-model-variant
+OPENCODE_TIMEOUT_MS=180000
+OPENCODE_SESSION_STRATEGY=per-agent-room | per-task | per-stage
 ```
 
 如果设置了 `TEAMROOM_TOKEN`，API 请求必须发送：
@@ -242,7 +305,7 @@ curl -X POST http://127.0.0.1:8787/api/rooms/<roomId>/tasks \
 ```text
 public/                 静态 UI
 src/
-  adapters/             OpenClaw 和 mock adapters
+  adapters/             OpenClaw、OpenCode 和 mock adapters
   plugin/               Native plugin 挂载草案
   config.js             运行时配置
   events.js             进程内 SSE hub

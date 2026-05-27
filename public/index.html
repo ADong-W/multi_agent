@@ -168,7 +168,7 @@
             <div class="prompt-template-control">
               <div class="prompt-template-intro">
                 <strong>Prompt 模板调优</strong>
-                <p>选择上方模板卡片后，下方会展开一个大编辑器。主模板决定派工、执行、终审；拼接子模板决定上下文如何传给下一个 Agent。</p>
+                <p>选择上方模板卡片后，下方会展开一个大编辑器。主模板决定派工、执行、终审；协议模板决定 JSON 输出格式。</p>
               </div>
               <div id="promptTemplateSummary" class="prompt-template-summary"></div>
               <div id="promptTemplateNav" class="prompt-template-nav"></div>
@@ -195,6 +195,20 @@
                     <small>主模板 · 汇总审核与人工确认判定</small>
                   </span>
                   <textarea id="supervisorReviewTemplateInput" class="template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card" data-template-key="dispatchJsonContract">
+                  <span>
+                    <b>派工 JSON 协议模板</b>
+                    <small>协议模板 · Supervisor 派工机器可读输出</small>
+                  </span>
+                  <textarea id="dispatchJsonContractTemplateInput" class="template-editor" spellcheck="false"></textarea>
+                </label>
+                <label class="field-label template-card" data-template-key="reviewJsonContract">
+                  <span>
+                    <b>终审 JSON 协议模板</b>
+                    <small>协议模板 · Supervisor 终审状态判定输出</small>
+                  </span>
+                  <textarea id="reviewJsonContractTemplateInput" class="template-editor" spellcheck="false"></textarea>
                 </label>
                 <label class="field-label template-card compact-template-card" data-template-key="previousOutputItem">
                   <span>
@@ -224,6 +238,6 @@
         </div>
       </section>
     </div>
-    <script type="module" src="/app.js?v=20260512-dev2-template-guide-1"></script>
+    <script type="module" src="/app.js?v=20260513-dev2-contract-templates-1"></script>
   </body>
 </html>

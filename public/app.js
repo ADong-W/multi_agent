@@ -39,6 +39,8 @@ const PROMPT_TEMPLATE_KEYS = [
   "supervisorDispatch",
   "specialistWork",
   "supervisorReview",
+  "dispatchJsonContract",
+  "reviewJsonContract",
   "previousOutputItem",
   "roomContextItem",
   "taskMessageItem"
@@ -68,6 +70,22 @@ const PROMPT_TEMPLATE_META = [
     tone: "汇总审核与人工确认判定",
     description: "所有子 Agent 返回后，发送给总控 Agent，用于最终审核、判断 completed / pending / waiting。",
     textarea: "supervisorReviewTemplateInput"
+  },
+  {
+    key: "dispatchJsonContract",
+    title: "派工 JSON 协议",
+    group: "协议模板",
+    tone: "派工机器可读输出",
+    description: "注入到 Supervisor 派工模板，约束总控输出 TEAMROOM_DISPATCH_JSON_START / END JSON 块。",
+    textarea: "dispatchJsonContractTemplateInput"
+  },
+  {
+    key: "reviewJsonContract",
+    title: "终审 JSON 协议",
+    group: "协议模板",
+    tone: "终审状态判定",
+    description: "注入到 Supervisor 终审模板，约束总控输出 completed / pending / waiting 与确认点 JSON。",
+    textarea: "reviewJsonContractTemplateInput"
   },
   {
     key: "previousOutputItem",
@@ -112,8 +130,8 @@ const PROMPT_VARIABLE_GUIDE = [
   ["stageNeeds", "当前阶段需要的能力标签。"],
   ["stageReason", "总控把任务派给该 Agent 的原因。"],
   ["resumeInstruction", "任务中断后继续执行时注入的续跑说明。"],
-  ["dispatchJsonContract", "Supervisor 派工阶段必须遵守的机器可读 JSON 输出格式。"],
-  ["reviewJsonContract", "Supervisor 终审阶段必须遵守的机器可读 JSON 输出格式。"],
+  ["dispatchJsonContract", "派工 JSON 协议模板的渲染结果，会注入到 Supervisor 派工主模板。"],
+  ["reviewJsonContract", "终审 JSON 协议模板的渲染结果，会注入到 Supervisor 终审主模板。"],
   ["supervisorExtraPrompt", "协作策略里追加给总控阶段的自定义提示。"],
   ["specialistExtraPrompt", "协作策略里追加给专业子 Agent 阶段的自定义提示。"],
   ["reviewExtraPrompt", "协作策略里追加给总控终审阶段的自定义提示。"],
@@ -205,6 +223,8 @@ const els = {
   supervisorDispatchTemplateInput: document.querySelector("#supervisorDispatchTemplateInput"),
   specialistWorkTemplateInput: document.querySelector("#specialistWorkTemplateInput"),
   supervisorReviewTemplateInput: document.querySelector("#supervisorReviewTemplateInput"),
+  dispatchJsonContractTemplateInput: document.querySelector("#dispatchJsonContractTemplateInput"),
+  reviewJsonContractTemplateInput: document.querySelector("#reviewJsonContractTemplateInput"),
   previousOutputItemTemplateInput: document.querySelector("#previousOutputItemTemplateInput"),
   roomContextItemTemplateInput: document.querySelector("#roomContextItemTemplateInput"),
   taskMessageItemTemplateInput: document.querySelector("#taskMessageItemTemplateInput"),
@@ -1136,6 +1156,8 @@ function renderTeamRoomConfigForm() {
     els.supervisorDispatchTemplateInput,
     els.specialistWorkTemplateInput,
     els.supervisorReviewTemplateInput,
+    els.dispatchJsonContractTemplateInput,
+    els.reviewJsonContractTemplateInput,
     els.previousOutputItemTemplateInput,
     els.roomContextItemTemplateInput,
     els.taskMessageItemTemplateInput,
@@ -1151,6 +1173,8 @@ function fillPromptTemplateInputs(templates) {
   els.supervisorDispatchTemplateInput.value = templates.supervisorDispatch || "";
   els.specialistWorkTemplateInput.value = templates.specialistWork || "";
   els.supervisorReviewTemplateInput.value = templates.supervisorReview || "";
+  els.dispatchJsonContractTemplateInput.value = templates.dispatchJsonContract || "";
+  els.reviewJsonContractTemplateInput.value = templates.reviewJsonContract || "";
   els.previousOutputItemTemplateInput.value = templates.previousOutputItem || "";
   els.roomContextItemTemplateInput.value = templates.roomContextItem || "";
   els.taskMessageItemTemplateInput.value = templates.taskMessageItem || "";
@@ -1294,6 +1318,8 @@ function readTeamRoomConfigForm(existingPolicy = {}) {
       supervisorDispatch: els.supervisorDispatchTemplateInput.value,
       specialistWork: els.specialistWorkTemplateInput.value,
       supervisorReview: els.supervisorReviewTemplateInput.value,
+      dispatchJsonContract: els.dispatchJsonContractTemplateInput.value,
+      reviewJsonContract: els.reviewJsonContractTemplateInput.value,
       previousOutputItem: els.previousOutputItemTemplateInput.value,
       roomContextItem: els.roomContextItemTemplateInput.value,
       taskMessageItem: els.taskMessageItemTemplateInput.value

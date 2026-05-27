@@ -27,6 +27,17 @@ export function loadConfig() {
       responsesPath: process.env.OPENCLAW_RESPONSES_PATH || "/v1/responses",
       token: process.env.OPENCLAW_TOKEN || "",
       password: process.env.OPENCLAW_PASSWORD || ""
+    },
+    opencode: {
+      baseUrl: process.env.OPENCODE_BASE_URL || "http://127.0.0.1:4096",
+      token: process.env.OPENCODE_TOKEN || "",
+      directory: process.env.OPENCODE_DIRECTORY || "",
+      workspace: process.env.OPENCODE_WORKSPACE || "",
+      provider: process.env.OPENCODE_PROVIDER || "",
+      model: process.env.OPENCODE_MODEL || "",
+      variant: process.env.OPENCODE_VARIANT || "",
+      timeoutMs: readInt("OPENCODE_TIMEOUT_MS", 180000),
+      sessionStrategy: process.env.OPENCODE_SESSION_STRATEGY || "per-agent-room"
     }
   };
 }
