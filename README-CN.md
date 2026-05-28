@@ -254,6 +254,7 @@ OPENCODE_MODEL=optional-model-id
 OPENCODE_VARIANT=optional-model-variant
 OPENCODE_TIMEOUT_MS=180000
 OPENCODE_SESSION_STRATEGY=per-agent-room | per-task | per-stage
+OPENCODE_INCLUDE_HIDDEN_AGENTS=false
 ```
 
 如果设置了 `TEAMROOM_TOKEN`，API 请求必须发送：

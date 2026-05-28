@@ -5,15 +5,46 @@ export function createOpenCodeAdapter(config) {
   return {
     async listAgents() {
       const payload = await requestJson(options, "/agent");
-      const agents = normalizeAgentList(payload);
+      const agents = normalizeAgentList(payload, options);
       return dedupeAgents(agents).sort((a, b) => a.id.localeCompare(b.id));
     },
 
-    async runAgent(agentId, input, context = {}) {
+    async runAgent(agentId, input, context = {}, hooks = {}) {
       const sessionId = await ensureSession({ options, sessions, agentId, context });
-      const response = await requestJson(options, `/session/${encodeURIComponent(sessionId)}/message`, {
+      const handledRuntimeRequests = new Set();
+      let messageSettled = false;
+      let watcherError = null;
+      const watcher = watchRuntimeRequests({
+        options,
+        sessionId,
+        agentId,
+        hooks,
+        handled: handledRuntimeRequests,
+        isDone: () => messageSettled
+      }).catch((error) => {
+        watcherError = error;
+      });
+
+      let response = await requestJson(options, `/session/${encodeURIComponent(sessionId)}/message`, {
         method: "POST",
+        timeoutMs: Math.max(options.timeoutMs, 30 * 60 * 1000),
         body: JSON.stringify(buildPromptBody({ options, agentId, input, context }))
+      }).finally(async () => {
+        messageSettled = true;
+        await watcher;
+      });
+
+      if (watcherError) {
+        throw watcherError;
+      }
+
+      response = await waitForAssistantCompletion({
+        options,
+        sessionId,
+        agentId,
+        initial: response,
+        hooks,
+        handled: handledRuntimeRequests
       });
 
       const agentError = extractMessageError(response);
@@ -36,6 +67,258 @@ export function createOpenCodeAdapter(config) {
   };
 }
 
+async function watchRuntimeRequests({ options, sessionId, agentId, hooks, handled, isDone }) {
+  while (!isDone()) {
+    await handlePendingPermissions({ options, sessionId, agentId, hooks, handled });
+    await handlePendingQuestions({ options, sessionId, agentId, hooks, handled });
+    await sleep(1000);
+  }
+}
+
+async function waitForAssistantCompletion({ options, sessionId, agentId, initial, hooks, handled }) {
+  let latest = initial;
+  const messageId = assistantMessageId(initial);
+  const deadline = Date.now() + Math.max(options.timeoutMs, 30 * 60 * 1000);
+  while (Date.now() < deadline) {
+    await handlePendingPermissions({ options, sessionId, agentId, hooks, handled });
+    await handlePendingQuestions({ options, sessionId, agentId, hooks, handled });
+
+    const refreshed = messageId
+      ? await fetchAssistantMessage(options, sessionId, messageId).catch(() => null)
+      : await fetchLatestAssistantPayload(options, sessionId, agentId).catch(() => null);
+    if (refreshed) {
+      latest = refreshed;
+    }
+
+    if (isAssistantComplete(latest)) {
+      return latest;
+    }
+    await sleep(1000);
+  }
+  return latest;
+}
+
+function assistantMessageId(payload) {
+  return payload?.info?.id
+    || payload?.message?.id
+    || payload?.result?.info?.id
+    || payload?.data?.info?.id
+    || "";
+}
+
+async function fetchAssistantMessage(options, sessionId, messageId) {
+  return requestJson(options, `/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`, {
+    timeoutMs: 10000
+  });
+}
+
+async function fetchLatestAssistantPayload(options, sessionId, agentId) {
+  const payload = await requestJson(options, `/session/${encodeURIComponent(sessionId)}/message`, {
+    timeoutMs: 10000
+  });
+  if (!Array.isArray(payload)) {
+    return payload;
+  }
+  return [...payload].reverse().find((message) => {
+    const info = message?.info || message?.message || {};
+    return info.role === "assistant" && (!agentId || !info.agent || info.agent === agentId);
+  }) || null;
+}
+
+function isAssistantComplete(payload) {
+  if (!payload) {
+    return false;
+  }
+  const info = payload.info || payload.message || payload.result?.info || payload.data?.info || {};
+  if (extractMessageError(payload)) {
+    return true;
+  }
+  if (info.time?.completed || info.completedAt || info.finish || info.finish_reason) {
+    return true;
+  }
+  if (info.id && info.role === "assistant" && info.time?.created) {
+    return false;
+  }
+  const text = extractResponseText(payload);
+  if (text && !hasRunningToolPart(payload)) {
+    return true;
+  }
+  return false;
+}
+
+function hasRunningToolPart(payload) {
+  const parts = Array.isArray(payload?.parts)
+    ? payload.parts
+    : Array.isArray(payload?.message?.parts)
+      ? payload.message.parts
+      : [];
+  return parts.some((part) => {
+    const status = String(part?.state?.status || part?.status || "").toLowerCase();
+    return ["pending", "running", "queued"].includes(status);
+  });
+}
+
+async function handlePendingPermissions({ options, sessionId, agentId, hooks, handled }) {
+  const permissions = await listOpenCodePermissions(options);
+  for (const permission of permissions) {
+    if (!permission || permission.sessionID !== sessionId) {
+      continue;
+    }
+    const key = `permission:${permission.id}`;
+    if (handled.has(key)) {
+      continue;
+    }
+    handled.add(key);
+    if (typeof hooks.onApprovalRequest !== "function") {
+      throw new Error(`OpenCode requested permission ${permission.permission || permission.id}, but TeamRoom approval bridge is unavailable.`);
+    }
+    const response = await hooks.onApprovalRequest(normalizePermissionApproval(permission, agentId));
+    await replyOpenCodePermission(options, permission, response);
+  }
+}
+
+async function handlePendingQuestions({ options, sessionId, agentId, hooks, handled }) {
+  const questions = await listOpenCodeQuestions(options);
+  for (const question of questions) {
+    if (!question || question.sessionID !== sessionId) {
+      continue;
+    }
+    const key = `question:${question.id}`;
+    if (handled.has(key)) {
+      continue;
+    }
+    handled.add(key);
+    if (typeof hooks.onApprovalRequest !== "function") {
+      throw new Error(`OpenCode asked a question ${question.id}, but TeamRoom approval bridge is unavailable.`);
+    }
+    const response = await hooks.onApprovalRequest(normalizeQuestionApproval(question, agentId));
+    await replyOpenCodeQuestion(options, question, response);
+  }
+}
+
+async function listOpenCodePermissions(options) {
+  const payload = await requestJson(options, "/permission", { timeoutMs: 10000 }).catch((error) => {
+    if (/404/.test(error.message || "")) {
+      return [];
+    }
+    throw error;
+  });
+  return Array.isArray(payload) ? payload : [];
+}
+
+async function listOpenCodeQuestions(options) {
+  const payload = await requestJson(options, "/question", { timeoutMs: 10000 }).catch((error) => {
+    if (/404/.test(error.message || "")) {
+      return [];
+    }
+    throw error;
+  });
+  return Array.isArray(payload) ? payload : [];
+}
+
+function normalizePermissionApproval(permission, agentId) {
+  const patterns = Array.isArray(permission.patterns) ? permission.patterns.map(String) : [];
+  const permissionName = permission.permission || "permission";
+  return {
+    type: "permission",
+    id: permission.id,
+    sessionId: permission.sessionID,
+    agentId,
+    title: `OpenCode 请求确认 ${permissionName}`,
+    details: patterns.length
+      ? patterns.join("\n")
+      : `OpenCode agent ${agentId} 请求执行 ${permissionName}`,
+    permission: permissionName,
+    patterns,
+    canAlwaysAllow: Array.isArray(permission.always) && permission.always.length > 0,
+    tool: permission.tool || null,
+    raw: permission
+  };
+}
+
+function normalizeQuestionApproval(question, agentId) {
+  return {
+    type: "question",
+    id: question.id,
+    sessionId: question.sessionID,
+    agentId,
+    title: "OpenCode 请求人工回答",
+    details: `${agentId} 正在等待补充信息。`,
+    questions: Array.isArray(question.questions) ? question.questions : [],
+    tool: question.tool || null,
+    raw: question
+  };
+}
+
+async function replyOpenCodePermission(options, permission, response = {}) {
+  const reply = normalizePermissionReply(response);
+  try {
+    await requestJson(options, `/permission/${encodeURIComponent(permission.id)}/reply`, {
+      method: "POST",
+      timeoutMs: 10000,
+      body: JSON.stringify({
+        reply,
+        ...(response.message ? { message: String(response.message) } : {})
+      })
+    });
+    return;
+  } catch (error) {
+    if (/404/.test(error.message || "")) {
+      await requestJson(options, `/session/${encodeURIComponent(permission.sessionID)}/permissions/${encodeURIComponent(permission.id)}`, {
+        method: "POST",
+        timeoutMs: 10000,
+        body: JSON.stringify({ response: reply })
+      });
+      return;
+    }
+    throw error;
+  }
+}
+
+async function replyOpenCodeQuestion(options, question, response = {}) {
+  if (response.reply === "reject" || response.cancelled) {
+    await requestJson(options, `/question/${encodeURIComponent(question.id)}/reject`, {
+      method: "POST",
+      timeoutMs: 10000
+    }).catch((error) => {
+      if (!/404/.test(error.message || "")) {
+        throw error;
+      }
+    });
+    return;
+  }
+  const answers = normalizeQuestionAnswers(response.answers, question);
+  await requestJson(options, `/question/${encodeURIComponent(question.id)}/reply`, {
+    method: "POST",
+    timeoutMs: 10000,
+    body: JSON.stringify({ answers })
+  });
+}
+
+function normalizePermissionReply(response = {}) {
+  const reply = String(response.reply || response.response || "").trim().toLowerCase();
+  if (["once", "always", "reject"].includes(reply)) {
+    return reply;
+  }
+  if (response.cancelled || response.approved === false) {
+    return "reject";
+  }
+  return "once";
+}
+
+function normalizeQuestionAnswers(answers, question) {
+  const questionCount = Array.isArray(question.questions) ? question.questions.length : 0;
+  const normalized = Array.isArray(answers)
+    ? answers.map((item) => Array.isArray(item)
+      ? item.map(String).filter(Boolean)
+      : [String(item)].filter(Boolean))
+    : [];
+  while (normalized.length < questionCount) {
+    normalized.push([]);
+  }
+  return normalized;
+}
+
 function normalizeOptions(config) {
   const opencode = config.opencode || {};
   return {
@@ -47,16 +330,18 @@ function normalizeOptions(config) {
     model: opencode.model || "",
     variant: opencode.variant || "",
     timeoutMs: Number(opencode.timeoutMs || 180000),
-    sessionStrategy: opencode.sessionStrategy || "per-agent-room"
+    sessionStrategy: opencode.sessionStrategy || "per-agent-room",
+    includeHiddenAgents: Boolean(opencode.includeHiddenAgents)
   };
 }
 
-function normalizeAgentList(payload) {
+function normalizeAgentList(payload, options) {
   const items = Array.isArray(payload)
     ? payload.map((agent) => [agent?.id || agent?.name, agent])
     : Object.entries(payload?.agents || payload?.data || payload || {});
 
   return items
+    .filter(([, agent]) => options.includeHiddenAgents || !agent?.hidden)
     .map(([id, agent]) => normalizeAgent(agent, id))
     .filter(Boolean);
 }
@@ -168,7 +453,8 @@ function buildPromptBody({ options, agentId, input, context }) {
 
 async function requestJson(options, path, request = {}) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  const timeoutMs = Number(request.timeoutMs || options.timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(buildUrl(options, path), {
       method: request.method || "GET",
@@ -201,10 +487,17 @@ async function requestJson(options, path, request = {}) {
     if (error?.name === "AbortError") {
       throw new Error(`OpenCode request timed out: ${request.method || "GET"} ${path}`);
     }
+    if (error?.message === "fetch failed") {
+      throw new Error(`OpenCode request failed: cannot connect to ${options.baseUrl}. Please start opencode serve first.`);
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildUrl(options, path) {

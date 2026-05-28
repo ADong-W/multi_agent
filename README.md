@@ -249,6 +249,7 @@ OPENCODE_MODEL=optional-model-id
 OPENCODE_VARIANT=optional-model-variant
 OPENCODE_TIMEOUT_MS=180000
 OPENCODE_SESSION_STRATEGY=per-agent-room | per-task | per-stage
+OPENCODE_INCLUDE_HIDDEN_AGENTS=false
 ```
 
 If `TEAMROOM_TOKEN` is set, API requests must send:

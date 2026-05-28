@@ -14,6 +14,7 @@ export class Orchestrator {
     this.adapter = adapter;
     this.runningTasks = new Set();
     this.busyAgents = new Set();
+    this.runtimeApprovals = new Map();
   }
 
   async submitTask(roomId, request) {
@@ -117,6 +118,11 @@ export class Orchestrator {
       }
     }
     await this.store.updateTask(task);
+    await this.resolveTaskRuntimeApprovals(task.id, {
+      reply: "reject",
+      message: reason,
+      cancelled: true
+    });
     await this.events.publish(roomId, "task.cancelled", {
       taskId: task.id,
       reason
@@ -220,6 +226,81 @@ export class Orchestrator {
     return true;
   }
 
+  async requestRuntimeApproval({ roomId, task, stage, member, request }) {
+    const approvalId = createId("approval");
+    const approval = {
+      ...normalizeRuntimeApprovalRequest(request),
+      id: approvalId,
+      roomId,
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      status: "pending",
+      createdAt: nowIso()
+    };
+
+    approval.promise = new Promise((resolve) => {
+      approval.resolve = resolve;
+    });
+    this.runtimeApprovals.set(approvalId, approval);
+
+    const publicApproval = publicRuntimeApproval(approval);
+    stage.runtimeApproval = publicApproval;
+    task.runtimeApproval = publicApproval;
+    task.status = "approval_pending";
+    task.error = null;
+    await this.store.updateTask(task);
+    await this.events.publish(roomId, "runtime.approval_requested", {
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      approval: publicApproval
+    });
+
+    return approval.promise;
+  }
+
+  async respondRuntimeApproval(roomId, taskId, approvalId, response = {}) {
+    const approval = this.runtimeApprovals.get(approvalId);
+    if (!approval || approval.roomId !== roomId || approval.taskId !== taskId) {
+      const error = new Error(`Runtime approval not found: ${approvalId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    if (approval.status !== "pending") {
+      return { approval: publicRuntimeApproval(approval) };
+    }
+
+    const normalized = normalizeRuntimeApprovalResponse(approval, response);
+    approval.status = normalized.reply === "reject" ? "rejected" : "approved";
+    approval.response = normalized;
+    approval.resolvedAt = nowIso();
+    this.runtimeApprovals.delete(approvalId);
+
+    const task = await this.store.getTask(taskId);
+    if (task) {
+      task.runtimeApproval = publicRuntimeApproval(approval);
+      if (task.status === "approval_pending") {
+        task.status = "running";
+      }
+      const stage = task.stages?.find((item) => item.id === approval.stageId);
+      if (stage) {
+        stage.runtimeApproval = publicRuntimeApproval(approval);
+      }
+      await this.store.updateTask(task);
+    }
+
+    await this.events.publish(roomId, "runtime.approval_resolved", {
+      taskId,
+      stageId: approval.stageId,
+      agentId: approval.agentId,
+      approval: publicRuntimeApproval(approval)
+    });
+
+    approval.resolve(normalized);
+    return { approval: publicRuntimeApproval(approval) };
+  }
+
   async runTask(taskId) {
     if (this.runningTasks.has(taskId)) {
       return;
@@ -319,6 +400,14 @@ export class Orchestrator {
             roomContext,
             taskMessages,
             resumeInstruction: task.resumeInstruction || ""
+          }, {
+            onApprovalRequest: (request) => this.requestRuntimeApproval({
+              roomId: room.id,
+              task,
+              stage,
+              member,
+              request
+            })
           });
         } catch (error) {
           const shouldRetry = await this.scheduleAutoRetry({
@@ -340,6 +429,11 @@ export class Orchestrator {
           await this.store.setMemberStatus(room.id, member.agentId, "idle");
           return;
         }
+        if (task.status === "approval_pending") {
+          task.status = "running";
+        }
+        task.runtimeApproval = null;
+        stage.runtimeApproval = null;
 
         stage.status = "completed";
         stage.completedAt = nowIso();
@@ -456,7 +550,30 @@ export class Orchestrator {
         error: error.message
       });
     } finally {
+      await this.resolveTaskRuntimeApprovals(taskId, {
+        reply: "reject",
+        message: "Task finished before the runtime approval was resolved.",
+        cancelled: true
+      });
       this.runningTasks.delete(taskId);
+    }
+  }
+
+  async resolveTaskRuntimeApprovals(taskId, response) {
+    const approvals = [...this.runtimeApprovals.values()]
+      .filter((approval) => approval.taskId === taskId && approval.status === "pending");
+    for (const approval of approvals) {
+      approval.status = "cancelled";
+      approval.response = response;
+      approval.resolvedAt = nowIso();
+      this.runtimeApprovals.delete(approval.id);
+      approval.resolve(response);
+      await this.events.publish(approval.roomId, "runtime.approval_resolved", {
+        taskId: approval.taskId,
+        stageId: approval.stageId,
+        agentId: approval.agentId,
+        approval: publicRuntimeApproval(approval)
+      });
     }
   }
 
@@ -702,6 +819,116 @@ function normalizeAgentResult(result) {
     summary: result.summary || result.content || JSON.stringify(result),
     artifacts: Array.isArray(result.artifacts) ? result.artifacts : [],
     nextActions: result.nextActions || result.next_actions || []
+  };
+}
+
+function normalizeRuntimeApprovalRequest(request = {}) {
+  const type = request.type === "question" ? "question" : "permission";
+  if (type === "question") {
+    return {
+      type,
+      externalId: request.id || request.requestId || "",
+      sessionId: request.sessionId || request.sessionID || "",
+      title: request.title || "OpenCode 请求人工回答",
+      details: request.details || "",
+      questions: normalizeRuntimeQuestions(request.questions || []),
+      raw: request.raw || null
+    };
+  }
+
+  return {
+    type,
+    externalId: request.id || request.requestId || "",
+    sessionId: request.sessionId || request.sessionID || "",
+    title: request.title || "OpenCode 请求执行确认",
+    details: request.details || "",
+    permission: request.permission || "",
+    patterns: Array.isArray(request.patterns) ? request.patterns.map(String) : [],
+    canAlwaysAllow: Boolean(request.canAlwaysAllow),
+    tool: request.tool || null,
+    raw: request.raw || null
+  };
+}
+
+function normalizeRuntimeQuestions(questions) {
+  return (Array.isArray(questions) ? questions : [])
+    .map((question, index) => ({
+      header: String(question.header || `问题 ${index + 1}`).trim(),
+      question: String(question.question || question.header || "").trim(),
+      options: (Array.isArray(question.options) ? question.options : [])
+        .map((option, optionIndex) => ({
+          label: String(option.label || option.value || optionIndex + 1).trim(),
+          description: String(option.description || option.value || option.label || "").trim()
+        }))
+        .filter((option) => option.label || option.description),
+      multiple: Boolean(question.multiple),
+      custom: question.custom !== false
+    }))
+    .filter((question) => question.question || question.header);
+}
+
+function normalizeRuntimeApprovalResponse(approval, response = {}) {
+  const message = String(response.message || response.reason || "").trim();
+  if (approval.type === "question") {
+    return {
+      type: "question",
+      reply: "once",
+      answers: normalizeQuestionAnswerPayload(response.answers || response.answer || response.content),
+      message
+    };
+  }
+
+  const rawReply = String(response.reply || response.response || response.action || "").trim().toLowerCase();
+  const reply = ({
+    approve: "once",
+    approved: "once",
+    allow: "once",
+    once: "once",
+    yes: "once",
+    always: "always",
+    reject: "reject",
+    deny: "reject",
+    denied: "reject",
+    no: "reject"
+  })[rawReply] || (response.approved === false ? "reject" : "once");
+
+  return {
+    type: "permission",
+    reply: ["once", "always", "reject"].includes(reply) ? reply : "once",
+    message
+  };
+}
+
+function normalizeQuestionAnswerPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map((answer) => Array.isArray(answer)
+      ? answer.map(String).filter(Boolean)
+      : [String(answer)].filter(Boolean));
+  }
+  const text = String(value || "").trim();
+  return text ? [[text]] : [];
+}
+
+function publicRuntimeApproval(approval) {
+  return {
+    id: approval.id,
+    externalId: approval.externalId || "",
+    type: approval.type,
+    sessionId: approval.sessionId || "",
+    taskId: approval.taskId,
+    stageId: approval.stageId,
+    agentId: approval.agentId,
+    title: approval.title,
+    details: approval.details || "",
+    permission: approval.permission || "",
+    patterns: approval.patterns || [],
+    questions: approval.questions || [],
+    canAlwaysAllow: Boolean(approval.canAlwaysAllow),
+    tool: approval.tool || null,
+    status: approval.status,
+    response: approval.response || null,
+    createdAt: approval.createdAt,
+    resolvedAt: approval.resolvedAt || null
   };
 }
 

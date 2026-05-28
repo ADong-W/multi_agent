@@ -275,6 +275,18 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
       return;
     }
 
+    if (req.method === "POST" && parts[3] === "tasks" && parts[4] && parts[5] === "approvals" && parts[6]) {
+      const body = await readJsonBody(req);
+      const result = await orchestrator.respondRuntimeApproval(
+        roomId,
+        decodeURIComponent(parts[4]),
+        decodeURIComponent(parts[6]),
+        body
+      );
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && parts[3] === "tasks") {
       const body = await readJsonBody(req);
       const task = await orchestrator.submitTask(roomId, body);

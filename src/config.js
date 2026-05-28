@@ -5,6 +5,14 @@ function readInt(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function readBool(name, fallback = false) {
+  const value = String(process.env[name] || "").trim().toLowerCase();
+  if (!value) {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(value);
+}
+
 export function loadConfig() {
   const rootDir = process.cwd();
   return {
@@ -37,7 +45,8 @@ export function loadConfig() {
       model: process.env.OPENCODE_MODEL || "",
       variant: process.env.OPENCODE_VARIANT || "",
       timeoutMs: readInt("OPENCODE_TIMEOUT_MS", 180000),
-      sessionStrategy: process.env.OPENCODE_SESSION_STRATEGY || "per-agent-room"
+      sessionStrategy: process.env.OPENCODE_SESSION_STRATEGY || "per-agent-room",
+      includeHiddenAgents: readBool("OPENCODE_INCLUDE_HIDDEN_AGENTS", false)
     }
   };
 }

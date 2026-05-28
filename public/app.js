@@ -1,6 +1,7 @@
 const state = {
   token: localStorage.getItem("teamroom.token") || "",
   agents: [],
+  agentLoadError: "",
   rooms: [],
   activeRoomId: localStorage.getItem("teamroom.activeRoomId") || "",
   activeRoom: null,
@@ -546,8 +547,14 @@ async function saveTeamRoomPolicyConfig() {
 }
 
 async function loadAgents() {
-  const payload = await api("/api/agents");
-  state.agents = payload.agents || [];
+  try {
+    const payload = await api("/api/agents");
+    state.agents = payload.agents || [];
+    state.agentLoadError = "";
+  } catch (error) {
+    state.agents = [];
+    state.agentLoadError = error.message || "Agent 加载失败";
+  }
   renderAgents();
 }
 
@@ -622,6 +629,8 @@ function connectEvents() {
     "task.cancelled",
     "task.resumed",
     "task.resume_skipped",
+    "runtime.approval_requested",
+    "runtime.approval_resolved",
     "stage.assigned",
     "stage.running",
     "stage.completed",
@@ -631,7 +640,7 @@ function connectEvents() {
     source.addEventListener(name, (message) => {
       const event = JSON.parse(message.data);
       appendLocalEvent(event);
-      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.") || name.startsWith("room.")) {
+      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.") || name.startsWith("room.") || name.startsWith("runtime.")) {
         loadActiveRoom();
       }
     });
@@ -791,6 +800,10 @@ function renderRooms() {
 }
 
 function renderAgents() {
+  if (state.agentLoadError) {
+    els.agentsList.innerHTML = `<div class="empty">Agent 加载失败：${escapeHtml(state.agentLoadError)}</div>`;
+    return;
+  }
   if (!state.agents.length) {
     els.agentsList.innerHTML = `<div class="empty">暂无 agents</div>`;
     return;
@@ -968,7 +981,10 @@ function renderActiveTaskStatus(task) {
   const retryHint = task.status === "retrying"
     ? `<span class="retry-hint">OpenClaw 连接异常，正在自动重连继续。</span>`
     : "";
-  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}`;
+  const approvalHint = task.status === "approval_pending"
+    ? `<span class="retry-hint">OpenCode 正在等待你确认工具执行或回答问题。</span>`
+    : "";
+  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}${approvalHint}`;
 }
 
 function renderEvents() {
@@ -984,6 +1000,7 @@ function renderEvents() {
     .join("");
   bindMessageToggles();
   bindPendingDecisionPanels();
+  bindRuntimeApprovalPanels();
   startRetryCountdowns();
   els.eventsFeed.scrollTop = els.eventsFeed.scrollHeight;
 }
@@ -1613,6 +1630,8 @@ function labelForEvent(event) {
     "task.wait_scheduled": "内部等待",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
+    "runtime.approval_requested": "OpenCode 等待确认",
+    "runtime.approval_resolved": "OpenCode 确认已处理",
     "stage.assigned": "阶段已分配",
     "stage.running": "阶段运行中",
     "stage.completed": "阶段已完成",
@@ -1658,6 +1677,16 @@ function bodyForEvent(event, payload) {
   }
   if (event.type === "task.wait_scheduled") {
     return `内部 Agent 尚未返回：${payload.reason || "等待执行结果"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动复核。`;
+  }
+  if (event.type === "runtime.approval_requested") {
+    const approval = payload.approval || {};
+    return approval.type === "question"
+      ? `${payload.agentId || approval.agentId || "OpenCode"} 请求人工回答`
+      : `${payload.agentId || approval.agentId || "OpenCode"} 请求执行确认：${approval.permission || approval.title || ""}`.trim();
+  }
+  if (event.type === "runtime.approval_resolved") {
+    const approval = payload.approval || {};
+    return `OpenCode 确认已处理：${approval.status || "resolved"}`;
   }
   if (event.type === "task.failed") {
     return payload.error || "任务失败";
@@ -1772,6 +1801,30 @@ function eventToMessage(event) {
     };
   }
 
+  if (event.type === "runtime.approval_requested") {
+    const approval = payload.approval || {};
+    return {
+      kind: "system runtime-approval",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: activeTask()?.id === (event.taskId || payload.taskId) && approval.status === "pending",
+      time: event.timestamp,
+      approval
+    };
+  }
+
+  if (event.type === "runtime.approval_resolved") {
+    const approval = payload.approval || {};
+    return {
+      kind: "system runtime-approval",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: false,
+      time: event.timestamp,
+      approval
+    };
+  }
+
   if (event.type === "task.retry_scheduled") {
     return {
       kind: "system retry",
@@ -1840,6 +1893,9 @@ function eventToMessage(event) {
 function renderMessage(message) {
   if (message.kind === "system pending") {
     return renderPendingDecisionPanel(message);
+  }
+  if (message.kind === "system runtime-approval") {
+    return renderRuntimeApprovalPanel(message);
   }
 
   if (message.kind.startsWith("system")) {
@@ -1961,6 +2017,111 @@ function renderDecisionItem(point, index, actionable = true) {
   `;
 }
 
+function renderRuntimeApprovalPanel(message) {
+  const approval = message.approval || {};
+  const actionable = message.actionable !== false && approval.status === "pending";
+  const title = approval.title || (approval.type === "question" ? "OpenCode 请求人工回答" : "OpenCode 请求执行确认");
+  const statusText = actionable ? "等待处理" : approvalStatusLabel(approval.status);
+  if (approval.type === "question") {
+    return renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable });
+  }
+  return renderRuntimePermissionPanel({ message, approval, title, statusText, actionable });
+}
+
+function renderRuntimePermissionPanel({ message, approval, title, statusText, actionable }) {
+  const patterns = Array.isArray(approval.patterns) ? approval.patterns.filter(Boolean) : [];
+  return `
+    <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="permission">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker runtime-kicker">OpenCode 确认</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(statusText)}</small>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="runtime-permission-body">
+        <div class="runtime-permission-meta">
+          <span>Agent</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong>
+          <span>权限</span><strong>${escapeHtml(approval.permission || "tool")}</strong>
+        </div>
+        ${patterns.length
+          ? `<pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre>`
+          : `<p>${escapeHtml(approval.details || "OpenCode 请求执行一个受权限控制的动作。")}</p>`}
+        ${actionable ? `
+          <textarea class="runtime-approval-message" rows="2" placeholder="可选：给 OpenCode 的说明"></textarea>
+          <div class="decision-actions">
+            <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
+            ${approval.canAlwaysAllow ? `<button type="button" class="secondary runtime-approval-reply" data-runtime-reply="always">始终允许</button>` : ""}
+            <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">本次允许</button>
+          </div>
+        ` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable }) {
+  const questions = (approval.questions || []).length
+    ? approval.questions
+    : [{ header: "问题", question: approval.details || title, options: [], custom: true }];
+  return `
+    <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="question">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker runtime-kicker">OpenCode 问题</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(statusText)}</small>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="decision-list runtime-question-list">
+        ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable)).join("")}
+      </div>
+      ${actionable ? `
+        <textarea class="runtime-approval-message" rows="2" placeholder="可选：补充说明"></textarea>
+        <div class="decision-actions">
+          <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
+          <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">提交回答并继续</button>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderRuntimeQuestionItem(question, index, actionable) {
+  const options = Array.isArray(question.options) ? question.options : [];
+  return `
+    <article class="decision-item runtime-question-item" data-runtime-question-index="${index}" data-runtime-multiple="${question.multiple ? "true" : "false"}">
+      <div class="decision-number">${index + 1}</div>
+      <div class="decision-content">
+        <div class="decision-question">${escapeHtml(question.header || `问题 ${index + 1}`)}</div>
+        ${question.question ? `<div class="decision-hint">${escapeHtml(question.question)}</div>` : ""}
+        ${options.length ? `
+          <div class="decision-options">
+            ${options.map((option) => `
+              <button type="button" class="decision-option" data-runtime-question-option="${index}" data-option-value="${escapeHtml(option.label)}" ${actionable ? "" : "disabled"}>
+                <span>${escapeHtml(option.label)}</span>
+                <strong>${escapeHtml(option.description || option.label)}</strong>
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+        ${question.custom !== false ? `<input class="decision-custom-input" data-runtime-question-custom="${index}" placeholder="${options.length ? "输入其他答案" : "请输入回答"}" ${actionable ? "" : "disabled"} />` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function approvalStatusLabel(status) {
+  return ({
+    pending: "等待处理",
+    approved: "已允许",
+    rejected: "已拒绝",
+    cancelled: "已取消"
+  })[status] || status || "已处理";
+}
+
 function bindPendingDecisionPanels() {
   els.eventsFeed.querySelectorAll("[data-decision-panel]").forEach((panel) => {
     panel.querySelectorAll("[data-decision-option]").forEach((button) => {
@@ -2006,6 +2167,86 @@ function bindPendingDecisionPanels() {
       });
     });
   });
+}
+
+function bindRuntimeApprovalPanels() {
+  els.eventsFeed.querySelectorAll("[data-runtime-approval]").forEach((panel) => {
+    panel.querySelectorAll("[data-runtime-question-option]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = button.dataset.runtimeQuestionOption;
+        const question = button.closest("[data-runtime-question-index]");
+        const allowMultiple = question?.dataset.runtimeMultiple === "true";
+        if (!allowMultiple) {
+          panel.querySelectorAll(`[data-runtime-question-option="${index}"]`).forEach((item) => {
+            item.classList.toggle("selected", item === button);
+          });
+        } else {
+          button.classList.toggle("selected");
+        }
+        const input = panel.querySelector(`[data-runtime-question-custom="${index}"]`);
+        if (input) {
+          const selected = [...panel.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+            .map((item) => item.dataset.optionValue)
+            .filter(Boolean);
+          input.value = selected.join("；");
+        }
+      });
+    });
+
+    panel.querySelectorAll("[data-runtime-reply]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const reply = button.dataset.runtimeReply || "once";
+        await submitRuntimeApproval(panel, reply);
+      });
+    });
+  });
+}
+
+async function submitRuntimeApproval(panel, reply) {
+  const approvalId = panel.dataset.runtimeApproval;
+  const taskId = panel.dataset.runtimeTask;
+  if (!state.activeRoomId || !approvalId || !taskId) {
+    return;
+  }
+
+  const message = String(panel.querySelector(".runtime-approval-message")?.value || "").trim();
+  const body = panel.dataset.runtimeType === "question"
+    ? { reply, answers: collectRuntimeQuestionAnswers(panel), message }
+    : { reply, message };
+
+  panel.classList.add("submitting");
+  panel.querySelectorAll("button, input, textarea").forEach((item) => {
+    item.disabled = true;
+  });
+
+  try {
+    await api(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`, {
+      method: "POST",
+      body
+    });
+    setTimeout(loadActiveRoom, 300);
+  } catch (error) {
+    setConnection(error.message);
+    panel.classList.remove("submitting");
+    panel.querySelectorAll("button, input, textarea").forEach((item) => {
+      item.disabled = false;
+    });
+  }
+}
+
+function collectRuntimeQuestionAnswers(panel) {
+  return [...panel.querySelectorAll("[data-runtime-question-index]")]
+    .map((item) => {
+      const index = item.dataset.runtimeQuestionIndex;
+      const selected = [...item.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+        .map((button) => button.dataset.optionValue)
+        .filter(Boolean);
+      const custom = String(item.querySelector(`[data-runtime-question-custom="${index}"]`)?.value || "").trim();
+      if (custom && !selected.includes(custom)) {
+        selected.push(custom);
+      }
+      return selected;
+    });
 }
 
 function collectDecisionPanelContent(panel) {
@@ -2280,6 +2521,7 @@ function statusLabel(status) {
     running: "运行中",
     retrying: "重连中",
     pending: "待确认",
+    approval_pending: "待授权",
     completed: "已完成",
     failed: "已中断",
     cancelled: "已终止"
