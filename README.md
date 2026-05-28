@@ -100,34 +100,44 @@ http://127.0.0.1:8786
 
 If your company cannot use OpenClaw but can run [OpenCode](https://opencode.ai/docs/server/), TeamRoom can use OpenCode as the execution backend through `TEAMROOM_ADAPTER=opencode`.
 
-1. Start the OpenCode server in the project workspace that agents should work on. This starts only the OpenCode backend/API, not the TeamRoom UI:
+1. Restart the OpenCode server. This starts only the OpenCode backend/API, not the TeamRoom UI:
 
 ```bash
-cd <the-project-workspace-that-opencode-agents-should-operate-on>
 opencode serve --hostname 127.0.0.1 --port 4096
 ```
 
-2. Start TeamRoom in another terminal. This command must run inside the TeamRoom project directory because `npm start` needs this repository's `package.json`:
+2. Restart TeamRoom in another terminal. This command must run inside the TeamRoom project directory because `npm start` needs this repository's `package.json`.
+
+macOS / Linux example:
 
 ```bash
-cd xxx/multi_agent
-TEAMROOM_PORT=<choose-a-4-digit-port-for-teamroom> \
+cd /Users/adong/multi_agent
+
+TEAMROOM_PORT=8786 \
 TEAMROOM_ADAPTER=opencode \
 OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+Windows cmd example:
+
+```cmd
+cd /d D:\multi_agent
+
+set TEAMROOM_PORT=8786
+set TEAMROOM_ADAPTER=opencode
+set OPENCODE_BASE_URL=http://127.0.0.1:4096
+
 npm start
 ```
 
 3. Open the TeamRoom UI, not the OpenCode server URL:
 
 ```text
-http://127.0.0.1:<your-teamroom-port>
-```
-
-For example, if `TEAMROOM_PORT=8786`, open:
-
-```text
 http://127.0.0.1:8786
 ```
+
+Note: `http://127.0.0.1:4096` is the OpenCode server address, not the TeamRoom frontend. If OpenCode is not running, TeamRoom cannot load the Agents list.
 
 Optional model override:
 

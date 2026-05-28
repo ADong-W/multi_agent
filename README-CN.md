@@ -98,34 +98,44 @@ http://127.0.0.1:8786
 
 如果公司侧不能使用 OpenClaw，但可以运行 [OpenCode](https://opencode.ai/docs/server/)，TeamRoom 也可以通过 `TEAMROOM_ADAPTER=opencode` 把底层执行后端切到 OpenCode。
 
-1. 在希望 agent 工作的项目目录里启动 OpenCode server。这个命令启动的是 OpenCode 后端/API，不是 TeamRoom 前端界面：
+1. 重新启动 OpenCode server。这个命令启动的是 OpenCode 后端/API，不是 TeamRoom 前端界面：
 
 ```bash
-cd <希望 opencode agents 操作的项目目录>
 opencode serve --hostname 127.0.0.1 --port 4096
 ```
 
-2. 另开一个终端启动 TeamRoom。这个命令必须在 TeamRoom 项目目录里执行，因为 `npm start` 要读取这个仓库里的 `package.json`：
+2. 另开一个终端重启 TeamRoom。这个命令必须在 TeamRoom 项目目录里执行，因为 `npm start` 要读取这个仓库里的 `package.json`。
+
+macOS / Linux 示例：
 
 ```bash
-cd xxx/multi_agent
-TEAMROOM_PORT=<你自己设置一个4位数的端口用于给当前项目使用> \
+cd /Users/adong/multi_agent
+
+TEAMROOM_PORT=8786 \
 TEAMROOM_ADAPTER=opencode \
 OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+Windows cmd 示例：
+
+```cmd
+cd /d D:\multi_agent
+
+set TEAMROOM_PORT=8786
+set TEAMROOM_ADAPTER=opencode
+set OPENCODE_BASE_URL=http://127.0.0.1:4096
+
 npm start
 ```
 
 3. 打开 TeamRoom 前端，而不是 OpenCode server 地址：
 
 ```text
-http://127.0.0.1:<你设置的teamroom端口>
-```
-
-比如你设置的是 `TEAMROOM_PORT=8786`，就打开：
-
-```text
 http://127.0.0.1:8786
 ```
+
+注意：`http://127.0.0.1:4096` 是 OpenCode server 地址，不是 TeamRoom 前端。如果 OpenCode 没有启动，TeamRoom 左侧 Agents 会加载失败或为空。
 
 如果需要指定模型，可以加：
 
