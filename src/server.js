@@ -28,6 +28,11 @@ export async function createTeamRoomServer(config = loadConfig()) {
   const agentFiles = createOpenClawAgentFiles(config);
   const events = new EventHub({ store });
   const orchestrator = new Orchestrator({ store, events, adapter });
+  queueMicrotask(() => {
+    orchestrator.recoverInternalPendingTasks().catch((error) => {
+      console.error("Failed to recover internal pending tasks:", error);
+    });
+  });
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -94,19 +99,31 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
         "roomName",
         "roomMembers",
         "goal",
+        "memberRoles",
+        "memberCapabilities",
         "roomContext",
         "taskMessages",
         "previousOutputs",
         "stageTitle",
+        "stageType",
         "stageGoal",
         "stageNeeds",
         "stageReason",
         "resumeInstruction",
         "dispatchJsonContract",
+        "reviewJsonContract",
         "supervisorExtraPrompt",
         "specialistExtraPrompt",
         "reviewExtraPrompt",
-        "fallbackWarning"
+        "fallbackWarning",
+        "index",
+        "title",
+        "summary",
+        "status",
+        "completedAt",
+        "timestamp",
+        "author",
+        "content"
       ]
     });
     return;
@@ -255,6 +272,18 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
       const body = await readJsonBody(req);
       const task = await orchestrator.cancelTask(roomId, decodeURIComponent(parts[4]), body.reason);
       sendJson(res, 200, { task });
+      return;
+    }
+
+    if (req.method === "POST" && parts[3] === "tasks" && parts[4] && parts[5] === "approvals" && parts[6]) {
+      const body = await readJsonBody(req);
+      const result = await orchestrator.respondRuntimeApproval(
+        roomId,
+        decodeURIComponent(parts[4]),
+        decodeURIComponent(parts[6]),
+        body
+      );
+      sendJson(res, 200, result);
       return;
     }
 

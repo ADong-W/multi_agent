@@ -1,6 +1,7 @@
 const state = {
   token: localStorage.getItem("teamroom.token") || "",
   agents: [],
+  agentLoadError: "",
   rooms: [],
   activeRoomId: localStorage.getItem("teamroom.activeRoomId") || "",
   activeRoom: null,
@@ -19,7 +20,8 @@ const state = {
   promptDefaults: null,
   promptPlaceholders: [],
   source: null,
-  sourceRoomId: ""
+  sourceRoomId: "",
+  activePromptTemplateKey: localStorage.getItem("teamroom.activePromptTemplateKey") || "supervisorDispatch"
 };
 
 let retryCountdownTimer = null;
@@ -38,9 +40,111 @@ const PROMPT_TEMPLATE_KEYS = [
   "supervisorDispatch",
   "specialistWork",
   "supervisorReview",
+  "dispatchJsonContract",
+  "reviewJsonContract",
   "previousOutputItem",
   "roomContextItem",
   "taskMessageItem"
+];
+
+const PROMPT_TEMPLATE_META = [
+  {
+    key: "supervisorDispatch",
+    title: "Supervisor 派工",
+    group: "主模板",
+    tone: "需求分析与任务拆解",
+    description: "TeamRoom 首次接收用户需求后，发送给总控 Agent，用于判断影响范围并输出可解析派工 JSON。",
+    textarea: "supervisorDispatchTemplateInput"
+  },
+  {
+    key: "specialistWork",
+    title: "Specialist 执行",
+    group: "主模板",
+    tone: "专业子 Agent 处理",
+    description: "总控派出子任务后，发送给专业 Agent，包含原始需求、派工理由、前序输出与人工补充。",
+    textarea: "specialistWorkTemplateInput"
+  },
+  {
+    key: "supervisorReview",
+    title: "Supervisor 终审",
+    group: "主模板",
+    tone: "汇总审核与人工确认判定",
+    description: "所有子 Agent 返回后，发送给总控 Agent，用于最终审核、判断 completed / pending / waiting。",
+    textarea: "supervisorReviewTemplateInput"
+  },
+  {
+    key: "dispatchJsonContract",
+    title: "派工 JSON 协议",
+    group: "协议模板",
+    tone: "派工机器可读输出",
+    description: "注入到 Supervisor 派工模板，约束总控输出 TEAMROOM_DISPATCH_JSON_START / END JSON 块。",
+    textarea: "dispatchJsonContractTemplateInput"
+  },
+  {
+    key: "reviewJsonContract",
+    title: "终审 JSON 协议",
+    group: "协议模板",
+    tone: "终审状态判定",
+    description: "注入到 Supervisor 终审模板，约束总控输出 completed / pending / waiting 与确认点 JSON。",
+    textarea: "reviewJsonContractTemplateInput"
+  },
+  {
+    key: "previousOutputItem",
+    title: "前序输出拼接",
+    group: "拼接子模板",
+    tone: "agent 间上下文传递",
+    description: "控制 TeamRoom 如何把前一个阶段的输出拼进后续 Agent 的 prompt。",
+    textarea: "previousOutputItemTemplateInput"
+  },
+  {
+    key: "roomContextItem",
+    title: "历史任务拼接",
+    group: "拼接子模板",
+    tone: "协作室长期上下文",
+    description: "控制已完成历史任务如何进入当前任务 prompt，影响跨任务记忆的表达方式。",
+    textarea: "roomContextItemTemplateInput"
+  },
+  {
+    key: "taskMessageItem",
+    title: "人工消息拼接",
+    group: "拼接子模板",
+    tone: "人类补充与干预",
+    description: "控制中间聊天窗里人工补充、确认点回复、继续任务指令如何进入后续 prompt。",
+    textarea: "taskMessageItemTemplateInput"
+  }
+];
+
+const PROMPT_VARIABLE_GUIDE = [
+  ["agentName", "当前被调用的 OpenClaw Agent 展示名称。"],
+  ["agentId", "当前被调用的 Agent ID，用于派发子任务和标记输出来源。"],
+  ["roomName", "当前协作室名称。"],
+  ["roomMembers", "当前协作室里的 Agent 成员清单，包含角色标签、能力标签和可调度状态。"],
+  ["goal", "用户发布的当前任务原始需求。"],
+  ["roomContext", "协作室共享历史上下文，会按配置注入最近任务摘要。"],
+  ["taskMessages", "当前任务里，人类在中间聊天窗补充、干预、确认的信息。"],
+  ["previousOutputs", "当前任务已完成阶段的 Agent 输出汇总。"],
+  ["memberRoles", "当前被调用 Agent 的角色标签。"],
+  ["memberCapabilities", "当前被调用 Agent 的专业能力标签。"],
+  ["stageTitle", "当前派发阶段的标题。"],
+  ["stageType", "当前阶段类型，供模板区分派工、执行、复核等阶段。"],
+  ["stageGoal", "总控派给当前子 Agent 的具体阶段目标。"],
+  ["stageNeeds", "当前阶段需要的能力标签。"],
+  ["stageReason", "总控把任务派给该 Agent 的原因。"],
+  ["resumeInstruction", "任务中断后继续执行时注入的续跑说明。"],
+  ["dispatchJsonContract", "派工 JSON 协议模板的渲染结果，会注入到 Supervisor 派工主模板。"],
+  ["reviewJsonContract", "终审 JSON 协议模板的渲染结果，会注入到 Supervisor 终审主模板。"],
+  ["supervisorExtraPrompt", "协作策略里追加给总控阶段的自定义提示。"],
+  ["specialistExtraPrompt", "协作策略里追加给专业子 Agent 阶段的自定义提示。"],
+  ["reviewExtraPrompt", "协作策略里追加给总控终审阶段的自定义提示。"],
+  ["fallbackWarning", "JSON 解析失败且未开启兜底派工时，注入给总控的提醒。"],
+  ["index", "拼接列表中的序号，常用于历史任务或前序输出模板。"],
+  ["title", "前序阶段或输出标题。"],
+  ["summary", "历史任务摘要或前序阶段输出摘要。"],
+  ["status", "历史任务状态。"],
+  ["completedAt", "历史任务完成时间。"],
+  ["timestamp", "人工消息发生时间。"],
+  ["author", "人工消息作者。"],
+  ["content", "人工消息正文。"]
 ];
 
 const STAGE_TITLE_LABELS = {
@@ -114,12 +218,18 @@ const els = {
   configRoomContextLimitInput: document.querySelector("#configRoomContextLimitInput"),
   configTaskMessageLimitInput: document.querySelector("#configTaskMessageLimitInput"),
   promptPlaceholders: document.querySelector("#promptPlaceholders"),
+  promptVariableGuide: document.querySelector("#promptVariableGuide"),
+  promptTemplateSummary: document.querySelector("#promptTemplateSummary"),
+  promptTemplateNav: document.querySelector("#promptTemplateNav"),
   supervisorDispatchTemplateInput: document.querySelector("#supervisorDispatchTemplateInput"),
   specialistWorkTemplateInput: document.querySelector("#specialistWorkTemplateInput"),
   supervisorReviewTemplateInput: document.querySelector("#supervisorReviewTemplateInput"),
+  dispatchJsonContractTemplateInput: document.querySelector("#dispatchJsonContractTemplateInput"),
+  reviewJsonContractTemplateInput: document.querySelector("#reviewJsonContractTemplateInput"),
   previousOutputItemTemplateInput: document.querySelector("#previousOutputItemTemplateInput"),
   roomContextItemTemplateInput: document.querySelector("#roomContextItemTemplateInput"),
   taskMessageItemTemplateInput: document.querySelector("#taskMessageItemTemplateInput"),
+  resetCurrentPromptTemplateButton: document.querySelector("#resetCurrentPromptTemplateButton"),
   resetPolicyTemplatesButton: document.querySelector("#resetPolicyTemplatesButton"),
   savePolicyConfigButton: document.querySelector("#savePolicyConfigButton"),
   tokenInput: document.querySelector("#tokenInput"),
@@ -209,7 +319,22 @@ els.savePolicyConfigButton.addEventListener("click", async () => {
 
 els.resetPolicyTemplatesButton.addEventListener("click", () => {
   fillPromptTemplateInputs(state.promptDefaults || {});
+  renderPromptTemplateNav();
   setConfigStatus("已填入默认模板，点击保存后生效");
+});
+
+els.resetCurrentPromptTemplateButton.addEventListener("click", () => {
+  resetCurrentPromptTemplate();
+});
+
+PROMPT_TEMPLATE_META.forEach((meta) => {
+  const textarea = els[meta.textarea];
+  textarea?.addEventListener("focus", () => {
+    setActivePromptTemplate(meta.key);
+  });
+  textarea?.addEventListener("input", () => {
+    renderPromptTemplateNav();
+  });
 });
 
 els.roomForm.addEventListener("submit", async (event) => {
@@ -266,6 +391,14 @@ els.chatForm.addEventListener("submit", async (event) => {
     return;
   }
   els.chatMessageInput.value = "";
+  await submitHumanContent(content, {
+    restoreOnError: () => {
+      els.chatMessageInput.value = content;
+    }
+  });
+});
+
+async function submitHumanContent(content, { restoreOnError } = {}) {
   try {
     const result = await api(`/api/rooms/${state.activeRoomId}/messages`, {
       method: "POST",
@@ -275,9 +408,11 @@ els.chatForm.addEventListener("submit", async (event) => {
     setTimeout(loadActiveRoom, 300);
   } catch (error) {
     setConnection(error.message);
-    els.chatMessageInput.value = content;
+    if (typeof restoreOnError === "function") {
+      restoreOnError();
+    }
   }
-});
+}
 
 els.cancelTaskButton.addEventListener("click", async () => {
   const task = activeTask();
@@ -311,7 +446,7 @@ async function refreshAll() {
 
 async function openConfigView() {
   state.configOpen = true;
-  state.configRoomId = state.configRoomId || state.activeRoomId || state.rooms[0]?.id || "";
+  state.configRoomId = state.activeRoomId || state.configRoomId || state.rooms[0]?.id || "";
   state.configAgentId = state.configAgentId || state.agents[0]?.id || "";
   els.shell.classList.add("config-open");
   els.configView.classList.remove("hidden");
@@ -412,8 +547,14 @@ async function saveTeamRoomPolicyConfig() {
 }
 
 async function loadAgents() {
-  const payload = await api("/api/agents");
-  state.agents = payload.agents || [];
+  try {
+    const payload = await api("/api/agents");
+    state.agents = payload.agents || [];
+    state.agentLoadError = "";
+  } catch (error) {
+    state.agents = [];
+    state.agentLoadError = error.message || "Agent 加载失败";
+  }
   renderAgents();
 }
 
@@ -482,11 +623,14 @@ function connectEvents() {
     "task.running",
     "task.pending",
     "task.retry_scheduled",
+    "task.wait_scheduled",
     "task.completed",
     "task.failed",
     "task.cancelled",
     "task.resumed",
     "task.resume_skipped",
+    "runtime.approval_requested",
+    "runtime.approval_resolved",
     "stage.assigned",
     "stage.running",
     "stage.completed",
@@ -496,7 +640,7 @@ function connectEvents() {
     source.addEventListener(name, (message) => {
       const event = JSON.parse(message.data);
       appendLocalEvent(event);
-      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.") || name.startsWith("room.")) {
+      if (name.startsWith("task.") || name.startsWith("stage.") || name.startsWith("member.") || name.startsWith("room.") || name.startsWith("runtime.")) {
         loadActiveRoom();
       }
     });
@@ -656,6 +800,10 @@ function renderRooms() {
 }
 
 function renderAgents() {
+  if (state.agentLoadError) {
+    els.agentsList.innerHTML = `<div class="empty">Agent 加载失败：${escapeHtml(state.agentLoadError)}</div>`;
+    return;
+  }
   if (!state.agents.length) {
     els.agentsList.innerHTML = `<div class="empty">暂无 agents</div>`;
     return;
@@ -833,7 +981,10 @@ function renderActiveTaskStatus(task) {
   const retryHint = task.status === "retrying"
     ? `<span class="retry-hint">OpenClaw 连接异常，正在自动重连继续。</span>`
     : "";
-  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}`;
+  const approvalHint = task.status === "approval_pending"
+    ? `<span class="retry-hint">OpenCode 正在等待你确认工具执行或回答问题。</span>`
+    : "";
+  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}${approvalHint}`;
 }
 
 function renderEvents() {
@@ -848,6 +999,8 @@ function renderEvents() {
     .map(renderMessage)
     .join("");
   bindMessageToggles();
+  bindPendingDecisionPanels();
+  bindRuntimeApprovalPanels();
   startRetryCountdowns();
   els.eventsFeed.scrollTop = els.eventsFeed.scrollHeight;
 }
@@ -870,12 +1023,13 @@ function updateRetryCountdowns() {
   }
   els.eventsFeed.querySelectorAll("[data-retry-at]").forEach((item) => {
     const retryAt = new Date(item.dataset.retryAt).getTime();
+    const label = item.dataset.retryLabel || "自动重连";
     if (!Number.isFinite(retryAt)) {
-      item.textContent = "准备自动重连";
+      item.textContent = `准备${label}`;
       return;
     }
     const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
-    item.textContent = seconds > 0 ? `${seconds}s 后自动重连` : "正在自动重连";
+    item.textContent = seconds > 0 ? `${seconds}s 后${label}` : `正在${label}`;
   });
 }
 
@@ -1008,6 +1162,7 @@ function renderTeamRoomConfigForm() {
   els.configTaskMessageLimitInput.value = Number(policy.taskMessageLimit ?? 12);
   fillPromptTemplateInputs(templates);
   renderPromptPlaceholders();
+  renderPromptTemplateNav();
 
   const disabled = !room;
   [
@@ -1018,9 +1173,12 @@ function renderTeamRoomConfigForm() {
     els.supervisorDispatchTemplateInput,
     els.specialistWorkTemplateInput,
     els.supervisorReviewTemplateInput,
+    els.dispatchJsonContractTemplateInput,
+    els.reviewJsonContractTemplateInput,
     els.previousOutputItemTemplateInput,
     els.roomContextItemTemplateInput,
     els.taskMessageItemTemplateInput,
+    els.resetCurrentPromptTemplateButton,
     els.resetPolicyTemplatesButton,
     els.savePolicyConfigButton
   ].forEach((element) => {
@@ -1032,6 +1190,8 @@ function fillPromptTemplateInputs(templates) {
   els.supervisorDispatchTemplateInput.value = templates.supervisorDispatch || "";
   els.specialistWorkTemplateInput.value = templates.specialistWork || "";
   els.supervisorReviewTemplateInput.value = templates.supervisorReview || "";
+  els.dispatchJsonContractTemplateInput.value = templates.dispatchJsonContract || "";
+  els.reviewJsonContractTemplateInput.value = templates.reviewJsonContract || "";
   els.previousOutputItemTemplateInput.value = templates.previousOutputItem || "";
   els.roomContextItemTemplateInput.value = templates.roomContextItem || "";
   els.taskMessageItemTemplateInput.value = templates.taskMessageItem || "";
@@ -1041,6 +1201,127 @@ function renderPromptPlaceholders() {
   els.promptPlaceholders.innerHTML = state.promptPlaceholders.map((name) => (
     `<code>{{${escapeHtml(name)}}}</code>`
   )).join("");
+  renderPromptVariableGuide();
+}
+
+function renderPromptVariableGuide() {
+  if (!els.promptVariableGuide) {
+    return;
+  }
+  const serverPlaceholders = new Set(state.promptPlaceholders || []);
+  const variables = PROMPT_VARIABLE_GUIDE.filter(([name]) => (
+    serverPlaceholders.size === 0 || serverPlaceholders.has(name) || [
+      "memberRoles",
+      "memberCapabilities",
+      "stageType",
+      "reviewJsonContract",
+      "index",
+      "title",
+      "summary",
+      "status",
+      "completedAt",
+      "timestamp",
+      "author",
+      "content"
+    ].includes(name)
+  ));
+  els.promptVariableGuide.innerHTML = `
+    <div class="variable-guide-head">
+      <h4>变量说明</h4>
+      <p>保存后，TeamRoom 会在发送给 Agent 前自动替换这些占位符。</p>
+    </div>
+    <dl>
+      ${variables.map(([name, description]) => `
+        <div>
+          <dt><code>{{${escapeHtml(name)}}}</code></dt>
+          <dd>${escapeHtml(description)}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
+}
+
+function renderPromptTemplateNav() {
+  const active = promptTemplateMeta(state.activePromptTemplateKey) || PROMPT_TEMPLATE_META[0];
+  state.activePromptTemplateKey = active.key;
+  const changedCount = PROMPT_TEMPLATE_META.filter((meta) => isPromptTemplateChanged(meta.key)).length;
+  if (els.promptTemplateSummary) {
+    els.promptTemplateSummary.innerHTML = `
+      <span>${changedCount} / ${PROMPT_TEMPLATE_META.length} 已微调</span>
+      <strong>${escapeHtml(active.title)}</strong>
+      <em>${escapeHtml(active.description)}</em>
+    `;
+  }
+  if (els.promptTemplateNav) {
+    els.promptTemplateNav.innerHTML = PROMPT_TEMPLATE_META.map((meta) => {
+      const changed = isPromptTemplateChanged(meta.key);
+      return `
+        <button type="button" class="${meta.key === active.key ? "active" : ""}" data-prompt-template-key="${escapeHtml(meta.key)}">
+          <span>${escapeHtml(meta.group)}</span>
+          <strong>${escapeHtml(meta.title)}</strong>
+          <em>${escapeHtml(meta.tone)}</em>
+          <small>${changed ? "已微调" : "默认"}</small>
+        </button>
+      `;
+    }).join("");
+    els.promptTemplateNav.querySelectorAll("[data-prompt-template-key]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setActivePromptTemplate(button.dataset.promptTemplateKey, { focus: true });
+      });
+    });
+  }
+  document.querySelectorAll("[data-template-key]").forEach((card) => {
+    const key = card.dataset.templateKey;
+    const isActive = key === active.key;
+    card.hidden = !isActive;
+    card.setAttribute("aria-hidden", String(!isActive));
+    card.classList.toggle("active", isActive);
+    card.classList.toggle("changed", isPromptTemplateChanged(key));
+  });
+}
+
+function setActivePromptTemplate(key, { focus = false } = {}) {
+  const meta = promptTemplateMeta(key);
+  if (!meta) {
+    return;
+  }
+  state.activePromptTemplateKey = meta.key;
+  localStorage.setItem("teamroom.activePromptTemplateKey", meta.key);
+  renderPromptTemplateNav();
+  const card = document.querySelector(`[data-template-key="${cssEscape(meta.key)}"]`);
+  if (focus && card) {
+    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    els[meta.textarea]?.focus();
+  }
+}
+
+function resetCurrentPromptTemplate() {
+  const meta = promptTemplateMeta(state.activePromptTemplateKey);
+  if (!meta || !state.promptDefaults) {
+    return;
+  }
+  const textarea = els[meta.textarea];
+  if (!textarea) {
+    return;
+  }
+  textarea.value = state.promptDefaults[meta.key] || "";
+  renderPromptTemplateNav();
+  setConfigStatus(`${meta.title} 已恢复默认，点击保存后生效`);
+  textarea.focus();
+}
+
+function promptTemplateMeta(key) {
+  return PROMPT_TEMPLATE_META.find((meta) => meta.key === key);
+}
+
+function isPromptTemplateChanged(key) {
+  const meta = promptTemplateMeta(key);
+  if (!meta) {
+    return false;
+  }
+  const current = String(els[meta.textarea]?.value || "").trim();
+  const original = String(state.promptDefaults?.[key] || "").trim();
+  return current !== original;
 }
 
 function readTeamRoomConfigForm(existingPolicy = {}) {
@@ -1054,6 +1335,8 @@ function readTeamRoomConfigForm(existingPolicy = {}) {
       supervisorDispatch: els.supervisorDispatchTemplateInput.value,
       specialistWork: els.specialistWorkTemplateInput.value,
       supervisorReview: els.supervisorReviewTemplateInput.value,
+      dispatchJsonContract: els.dispatchJsonContractTemplateInput.value,
+      reviewJsonContract: els.reviewJsonContractTemplateInput.value,
       previousOutputItem: els.previousOutputItemTemplateInput.value,
       roomContextItem: els.roomContextItemTemplateInput.value,
       taskMessageItem: els.taskMessageItemTemplateInput.value
@@ -1344,8 +1627,11 @@ function labelForEvent(event) {
     "task.running": "任务运行中",
     "task.pending": "等待人工确认",
     "task.retry_scheduled": "自动重连",
+    "task.wait_scheduled": "内部等待",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
+    "runtime.approval_requested": "OpenCode 等待确认",
+    "runtime.approval_resolved": "OpenCode 确认已处理",
     "stage.assigned": "阶段已分配",
     "stage.running": "阶段运行中",
     "stage.completed": "阶段已完成",
@@ -1388,6 +1674,19 @@ function bodyForEvent(event, payload) {
   }
   if (event.type === "task.retry_scheduled") {
     return `OpenClaw 连接异常：${payload.error || "连接中断"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动继续。`;
+  }
+  if (event.type === "task.wait_scheduled") {
+    return `内部 Agent 尚未返回：${payload.reason || "等待执行结果"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动复核。`;
+  }
+  if (event.type === "runtime.approval_requested") {
+    const approval = payload.approval || {};
+    return approval.type === "question"
+      ? `${payload.agentId || approval.agentId || "OpenCode"} 请求人工回答`
+      : `${payload.agentId || approval.agentId || "OpenCode"} 请求执行确认：${approval.permission || approval.title || ""}`.trim();
+  }
+  if (event.type === "runtime.approval_resolved") {
+    const approval = payload.approval || {};
+    return `OpenCode 确认已处理：${approval.status || "resolved"}`;
   }
   if (event.type === "task.failed") {
     return payload.error || "任务失败";
@@ -1490,10 +1789,39 @@ function eventToMessage(event) {
     const points = payload.confirmationPoints || [];
     return {
       kind: "system pending",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: activeTask()?.id === (event.taskId || payload.taskId) && activeTask()?.status === "pending",
       time: event.timestamp,
+      points,
+      reason: payload.reason || "",
       body: points.length
         ? `任务等待人工确认：${points.join("；")}`
         : (payload.reason || "任务等待人工确认")
+    };
+  }
+
+  if (event.type === "runtime.approval_requested") {
+    const approval = payload.approval || {};
+    return {
+      kind: "system runtime-approval",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: activeTask()?.id === (event.taskId || payload.taskId) && approval.status === "pending",
+      time: event.timestamp,
+      approval
+    };
+  }
+
+  if (event.type === "runtime.approval_resolved") {
+    const approval = payload.approval || {};
+    return {
+      kind: "system runtime-approval",
+      id: event.id,
+      taskId: event.taskId || payload.taskId || "",
+      actionable: false,
+      time: event.timestamp,
+      approval
     };
   }
 
@@ -1502,7 +1830,18 @@ function eventToMessage(event) {
       kind: "system retry",
       time: event.timestamp,
       retryAt: payload.retryAt,
+      retryLabel: "自动重连",
       body: `OpenClaw 连接异常，已安排自动重连继续。${payload.error ? `原因：${payload.error}` : ""}`.trim()
+    };
+  }
+
+  if (event.type === "task.wait_scheduled") {
+    return {
+      kind: "system retry",
+      time: event.timestamp,
+      retryAt: payload.retryAt,
+      retryLabel: "自动复核",
+      body: `内部 Agent 尚未返回，已安排自动复核。${payload.reason ? `原因：${payload.reason}` : ""}`.trim()
     };
   }
 
@@ -1552,9 +1891,16 @@ function eventToMessage(event) {
 }
 
 function renderMessage(message) {
+  if (message.kind === "system pending") {
+    return renderPendingDecisionPanel(message);
+  }
+  if (message.kind === "system runtime-approval") {
+    return renderRuntimeApprovalPanel(message);
+  }
+
   if (message.kind.startsWith("system")) {
     const retryCountdown = message.retryAt
-      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}">5s 后自动重连</strong>`
+      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}" data-retry-label="${escapeHtml(message.retryLabel || "自动重连")}">5s 后${escapeHtml(message.retryLabel || "自动重连")}</strong>`
       : "";
     return `
       <div class="message-system ${message.kind.includes("error") ? "error" : ""} ${message.kind.includes("pending") ? "pending" : ""} ${message.kind.includes("retry") ? "retry" : ""}">
@@ -1586,6 +1932,518 @@ function renderMessage(message) {
       </div>
     </article>
   `;
+}
+
+function renderPendingDecisionPanel(message) {
+  const points = normalizeDecisionPoints(message.points?.length ? message.points : [message.body]);
+  const actionable = message.actionable !== false;
+  if (!actionable) {
+    return renderResolvedDecisionPanel(message, points);
+  }
+  return `
+    <section class="decision-panel" data-decision-panel="${escapeHtml(message.id || "")}">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker">需要人工确认</span>
+          <strong>${points.length} 个确认点，请选择或填写</strong>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="decision-list">
+        ${points.map((point, index) => renderDecisionItem(point, index, true)).join("")}
+      </div>
+      <details class="decision-extra">
+        <summary>补充说明</summary>
+        <textarea rows="2" data-decision-extra placeholder="可选：补充无法通过选项表达的说明"></textarea>
+      </details>
+      <div class="decision-actions">
+        <button type="button" class="secondary decision-fill-button" data-decision-fill>填入聊天框</button>
+        <button type="button" class="decision-submit-button" data-decision-submit>提交确认并继续</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderResolvedDecisionPanel(message, points) {
+  return `
+    <section class="decision-panel resolved compact">
+      <details>
+        <summary class="decision-history-summary">
+          <span class="decision-kicker">历史确认点</span>
+          <strong>${points.length} 个确认点已处理</strong>
+          <time>${formatTime(message.time)}</time>
+        </summary>
+        <div class="decision-history-list">
+          ${points.map((point, index) => `
+            <div class="decision-history-item">
+              <span>${index + 1}</span>
+              <p>${escapeHtml(point.question)}</p>
+            </div>
+          `).join("")}
+        </div>
+      </details>
+    </section>
+  `;
+}
+
+function renderDecisionItem(point, index, actionable = true) {
+  const optionButtons = point.options.length
+    ? `<div class="decision-options">
+        ${point.options.map((option, optionIndex) => `
+          <button type="button" class="decision-option" data-decision-option="${index}" data-option-value="${escapeHtml(option.value)}" title="${escapeHtml(option.value)}" ${actionable ? "" : "disabled"}>
+            <span>${escapeHtml(option.label || optionLabel(optionIndex))}</span>
+            <strong>${escapeHtml(option.value)}</strong>
+          </button>
+        `).join("")}
+      </div>`
+    : "";
+  const customInput = `<input class="decision-custom-input" data-decision-custom="${index}" placeholder="${point.options.length ? "输入其他答案" : "请输入你的确认意见"}" ${actionable ? "" : "disabled"} />`;
+  const customControl = point.options.length
+    ? `<details class="decision-custom-details">
+        <summary>自定义填写</summary>
+        ${customInput}
+      </details>`
+    : customInput;
+  return `
+    <article class="decision-item" data-decision-index="${index}" data-decision-question="${escapeHtml(point.question)}">
+      <div class="decision-number">${index + 1}</div>
+      <div class="decision-content">
+        <div class="decision-question">${escapeHtml(point.question)}</div>
+        ${point.hint ? `<div class="decision-hint">${escapeHtml(point.hint)}</div>` : ""}
+        ${optionButtons}
+        ${customControl}
+      </div>
+    </article>
+  `;
+}
+
+function renderRuntimeApprovalPanel(message) {
+  const approval = message.approval || {};
+  const actionable = message.actionable !== false && approval.status === "pending";
+  const title = approval.title || (approval.type === "question" ? "OpenCode 请求人工回答" : "OpenCode 请求执行确认");
+  const statusText = actionable ? "等待处理" : approvalStatusLabel(approval.status);
+  if (approval.type === "question") {
+    return renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable });
+  }
+  return renderRuntimePermissionPanel({ message, approval, title, statusText, actionable });
+}
+
+function renderRuntimePermissionPanel({ message, approval, title, statusText, actionable }) {
+  const patterns = Array.isArray(approval.patterns) ? approval.patterns.filter(Boolean) : [];
+  return `
+    <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="permission">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker runtime-kicker">OpenCode 确认</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(statusText)}</small>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="runtime-permission-body">
+        <div class="runtime-permission-meta">
+          <span>Agent</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong>
+          <span>权限</span><strong>${escapeHtml(approval.permission || "tool")}</strong>
+        </div>
+        ${patterns.length
+          ? `<pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre>`
+          : `<p>${escapeHtml(approval.details || "OpenCode 请求执行一个受权限控制的动作。")}</p>`}
+        ${actionable ? `
+          <textarea class="runtime-approval-message" rows="2" placeholder="可选：给 OpenCode 的说明"></textarea>
+          <div class="decision-actions">
+            <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
+            ${approval.canAlwaysAllow ? `<button type="button" class="secondary runtime-approval-reply" data-runtime-reply="always">始终允许</button>` : ""}
+            <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">本次允许</button>
+          </div>
+        ` : ""}
+      </div>
+    </section>
+  `;
+}
+
+function renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable }) {
+  const questions = (approval.questions || []).length
+    ? approval.questions
+    : [{ header: "问题", question: approval.details || title, options: [], custom: true }];
+  return `
+    <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="question">
+      <div class="decision-panel-header">
+        <div>
+          <span class="decision-kicker runtime-kicker">OpenCode 问题</span>
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(statusText)}</small>
+        </div>
+        <time>${formatTime(message.time)}</time>
+      </div>
+      <div class="decision-list runtime-question-list">
+        ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable)).join("")}
+      </div>
+      ${actionable ? `
+        <textarea class="runtime-approval-message" rows="2" placeholder="可选：补充说明"></textarea>
+        <div class="decision-actions">
+          <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
+          <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">提交回答并继续</button>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderRuntimeQuestionItem(question, index, actionable) {
+  const options = Array.isArray(question.options) ? question.options : [];
+  return `
+    <article class="decision-item runtime-question-item" data-runtime-question-index="${index}" data-runtime-multiple="${question.multiple ? "true" : "false"}">
+      <div class="decision-number">${index + 1}</div>
+      <div class="decision-content">
+        <div class="decision-question">${escapeHtml(question.header || `问题 ${index + 1}`)}</div>
+        ${question.question ? `<div class="decision-hint">${escapeHtml(question.question)}</div>` : ""}
+        ${options.length ? `
+          <div class="decision-options">
+            ${options.map((option) => `
+              <button type="button" class="decision-option" data-runtime-question-option="${index}" data-option-value="${escapeHtml(option.label)}" ${actionable ? "" : "disabled"}>
+                <span>${escapeHtml(option.label)}</span>
+                <strong>${escapeHtml(option.description || option.label)}</strong>
+              </button>
+            `).join("")}
+          </div>
+        ` : ""}
+        ${question.custom !== false ? `<input class="decision-custom-input" data-runtime-question-custom="${index}" placeholder="${options.length ? "输入其他答案" : "请输入回答"}" ${actionable ? "" : "disabled"} />` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function approvalStatusLabel(status) {
+  return ({
+    pending: "等待处理",
+    approved: "已允许",
+    rejected: "已拒绝",
+    cancelled: "已取消"
+  })[status] || status || "已处理";
+}
+
+function bindPendingDecisionPanels() {
+  els.eventsFeed.querySelectorAll("[data-decision-panel]").forEach((panel) => {
+    panel.querySelectorAll("[data-decision-option]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = button.dataset.decisionOption;
+        panel.querySelectorAll(`[data-decision-option="${index}"]`).forEach((item) => {
+          item.classList.toggle("selected", item === button);
+        });
+        const input = panel.querySelector(`[data-decision-custom="${index}"]`);
+        if (input) {
+          input.value = button.dataset.optionValue || "";
+        }
+      });
+    });
+
+    panel.querySelector("[data-decision-fill]")?.addEventListener("click", () => {
+      const content = collectDecisionPanelContent(panel);
+      if (!content) {
+        setConnection("请至少选择或填写一个确认项");
+        return;
+      }
+      els.chatMessageInput.value = content;
+      els.chatMessageInput.focus();
+    });
+
+    panel.querySelector("[data-decision-submit]")?.addEventListener("click", async () => {
+      const content = collectDecisionPanelContent(panel);
+      if (!content) {
+        setConnection("请至少选择或填写一个确认项");
+        return;
+      }
+      panel.classList.add("submitting");
+      panel.querySelectorAll("button, input, textarea").forEach((item) => {
+        item.disabled = true;
+      });
+      await submitHumanContent(content, {
+        restoreOnError: () => {
+          panel.classList.remove("submitting");
+          panel.querySelectorAll("button, input, textarea").forEach((item) => {
+            item.disabled = false;
+          });
+        }
+      });
+    });
+  });
+}
+
+function bindRuntimeApprovalPanels() {
+  els.eventsFeed.querySelectorAll("[data-runtime-approval]").forEach((panel) => {
+    panel.querySelectorAll("[data-runtime-question-option]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = button.dataset.runtimeQuestionOption;
+        const question = button.closest("[data-runtime-question-index]");
+        const allowMultiple = question?.dataset.runtimeMultiple === "true";
+        if (!allowMultiple) {
+          panel.querySelectorAll(`[data-runtime-question-option="${index}"]`).forEach((item) => {
+            item.classList.toggle("selected", item === button);
+          });
+        } else {
+          button.classList.toggle("selected");
+        }
+        const input = panel.querySelector(`[data-runtime-question-custom="${index}"]`);
+        if (input) {
+          const selected = [...panel.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+            .map((item) => item.dataset.optionValue)
+            .filter(Boolean);
+          input.value = selected.join("；");
+        }
+      });
+    });
+
+    panel.querySelectorAll("[data-runtime-reply]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const reply = button.dataset.runtimeReply || "once";
+        await submitRuntimeApproval(panel, reply);
+      });
+    });
+  });
+}
+
+async function submitRuntimeApproval(panel, reply) {
+  const approvalId = panel.dataset.runtimeApproval;
+  const taskId = panel.dataset.runtimeTask;
+  if (!state.activeRoomId || !approvalId || !taskId) {
+    return;
+  }
+
+  const message = String(panel.querySelector(".runtime-approval-message")?.value || "").trim();
+  const body = panel.dataset.runtimeType === "question"
+    ? { reply, answers: collectRuntimeQuestionAnswers(panel), message }
+    : { reply, message };
+
+  panel.classList.add("submitting");
+  panel.querySelectorAll("button, input, textarea").forEach((item) => {
+    item.disabled = true;
+  });
+
+  try {
+    await api(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`, {
+      method: "POST",
+      body
+    });
+    setTimeout(loadActiveRoom, 300);
+  } catch (error) {
+    setConnection(error.message);
+    panel.classList.remove("submitting");
+    panel.querySelectorAll("button, input, textarea").forEach((item) => {
+      item.disabled = false;
+    });
+  }
+}
+
+function collectRuntimeQuestionAnswers(panel) {
+  return [...panel.querySelectorAll("[data-runtime-question-index]")]
+    .map((item) => {
+      const index = item.dataset.runtimeQuestionIndex;
+      const selected = [...item.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+        .map((button) => button.dataset.optionValue)
+        .filter(Boolean);
+      const custom = String(item.querySelector(`[data-runtime-question-custom="${index}"]`)?.value || "").trim();
+      if (custom && !selected.includes(custom)) {
+        selected.push(custom);
+      }
+      return selected;
+    });
+}
+
+function collectDecisionPanelContent(panel) {
+  const answers = [...panel.querySelectorAll("[data-decision-index]")]
+    .map((item) => {
+      const index = Number(item.dataset.decisionIndex || 0) + 1;
+      const question = item.dataset.decisionQuestion || `确认点 ${index}`;
+      const input = item.querySelector("[data-decision-custom]");
+      const answer = String(input?.value || "").trim();
+      return answer ? `${index}. ${question}: ${answer}` : "";
+    })
+    .filter(Boolean);
+  const extra = String(panel.querySelector("[data-decision-extra]")?.value || "").trim();
+  if (extra) {
+    answers.push(`补充说明: ${extra}`);
+  }
+  return answers.length ? `人工确认结果:\n${answers.join("\n")}` : "";
+}
+
+function normalizeDecisionPoints(points) {
+  const normalized = points
+    .flatMap(splitConfirmationText)
+    .map(parseDecisionPoint)
+    .filter((point) => point.question || point.hint);
+
+  return normalized.length
+    ? normalized
+    : [{ question: "确认意见", hint: "", options: [] }];
+}
+
+function splitConfirmationText(value) {
+  return String(value || "")
+    .replace(/^任务等待人工确认[:：]?/, "")
+    .split(/\n+|[；;]/)
+    .map((item) => item.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean);
+}
+
+function parseDecisionPoint(value) {
+  const text = String(value || "").trim();
+  const colonIndex = firstColonIndex(text);
+  const hasShortLabel = colonIndex > 0 && colonIndex <= 14;
+  const question = hasShortLabel
+    ? text.slice(0, colonIndex).trim()
+    : shortQuestionFromText(text);
+  const rawHint = hasShortLabel
+    ? text.slice(colonIndex + 1).trim()
+    : text;
+  const hint = cleanDecisionHint(question, rawHint);
+  return {
+    question: question || "确认点",
+    hint,
+    options: extractDecisionOptions(question, hint)
+  };
+}
+
+function firstColonIndex(value) {
+  const zh = value.indexOf("：");
+  const en = value.indexOf(":");
+  if (zh < 0) {
+    return en;
+  }
+  if (en < 0) {
+    return zh;
+  }
+  return Math.min(zh, en);
+}
+
+function shortQuestionFromText(value) {
+  const cleaned = String(value || "").trim();
+  const questionMark = cleaned.search(/[？?]/);
+  if (questionMark > 0 && questionMark <= 28) {
+    return cleaned.slice(0, questionMark + 1);
+  }
+  const comma = cleaned.search(/[，,]/);
+  if (comma > 0 && comma <= 16) {
+    return cleaned.slice(0, comma);
+  }
+  return cleaned.length > 26 ? `${cleaned.slice(0, 26)}...` : cleaned;
+}
+
+function cleanDecisionHint(question, hint) {
+  let value = String(hint || "").trim();
+  const title = String(question || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (title && normalizeDecisionText(value) === normalizeDecisionText(title)) {
+    return "";
+  }
+  if (title && value.startsWith(title)) {
+    value = value.slice(title.length).replace(/^[\s，,。:：？?]+/, "").trim();
+  }
+  if (title && normalizeDecisionText(value) === normalizeDecisionText(title)) {
+    return "";
+  }
+  return value;
+}
+
+function normalizeDecisionText(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[。？?：:，,]/g, "")
+    .toLowerCase();
+}
+
+function extractDecisionOptions(question, hint) {
+  const text = `${question || ""} ${hint || ""}`.trim();
+  const planOptions = extractPlanOptions(text);
+  if (planOptions.length > 0) {
+    return planOptions;
+  }
+
+  const eitherOptions = extractEitherOptions(hint);
+  if (eitherOptions.length > 0) {
+    return eitherOptions;
+  }
+
+  const code = text.match(/(?:建议编码|编码)\s*([A-Z]{2,}_[A-Z0-9_]+)/i)?.[1];
+  if (code) {
+    return [
+      { label: "A", value: `采用建议编码 ${code}` },
+      { label: "B", value: "使用既定编码（见自定义填写）" }
+    ];
+  }
+
+  if (/是否|需不需要|要不要|是否需要/.test(text)) {
+    const positive = /录入节点|_I/.test(text) ? "需要录入节点" : "需要";
+    const negative = /录入节点|_I/.test(text) ? "不需要录入节点" : "不需要";
+    return [
+      { label: "A", value: positive },
+      { label: "B", value: negative }
+    ];
+  }
+
+  return [];
+}
+
+function extractPlanOptions(text) {
+  const parts = String(text || "")
+    .split(/(?=方案\s*[A-DＡ-Ｄ]\s*[:：]?)/i)
+    .map((part) => part.trim())
+    .filter((part) => /^方案\s*[A-DＡ-Ｄ]/i.test(part));
+  if (parts.length < 2) {
+    return [];
+  }
+  return parts.slice(0, 4).map((part, index) => {
+    const label = part.match(/^方案\s*([A-DＡ-Ｄ])/i)?.[1] || optionLabel(index);
+    const value = part
+      .replace(/^方案\s*[A-DＡ-Ｄ]\s*[:：]?/i, "")
+      .replace(/[\/|]+$/, "")
+      .trim();
+    return { label: normalizeOptionLabel(label), value: value || part };
+  });
+}
+
+function extractEitherOptions(hint) {
+  const text = String(hint || "").trim();
+  if (!/还是/.test(text)) {
+    return [];
+  }
+  const [leftRaw, rightRaw] = text.split(/，?还是/);
+  if (!leftRaw || !rightRaw) {
+    return [];
+  }
+  const left = cleanInlineOptionText(leftRaw, "left");
+  const right = cleanInlineOptionText(rightRaw, "right");
+  return [left, right]
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((value, index) => ({ label: optionLabel(index), value }));
+}
+
+function cleanInlineOptionText(value, side = "left") {
+  let text = String(value || "").trim();
+  if (side === "left") {
+    text = text.replace(/^.*[？?]\s*/, "");
+  }
+  return text
+    .replace(/^.*(?:：|:)\s*/, "")
+    .replace(/[？?。；;，,].*$/, "")
+    .replace(/^[\s/｜|]+|[\s/｜|]+$/g, "")
+    .trim();
+}
+
+function optionLabel(index) {
+  return ["A", "B", "C", "D"][index] || String(index + 1);
+}
+
+function normalizeOptionLabel(label) {
+  const value = String(label || "").toUpperCase();
+  return ({
+    "Ａ": "A",
+    "Ｂ": "B",
+    "Ｃ": "C",
+    "Ｄ": "D"
+  })[value] || value;
 }
 
 function bindMessageToggles() {
@@ -1663,6 +2521,7 @@ function statusLabel(status) {
     running: "运行中",
     retrying: "重连中",
     pending: "待确认",
+    approval_pending: "待授权",
     completed: "已完成",
     failed: "已中断",
     cancelled: "已终止"
@@ -1701,7 +2560,7 @@ function escapeHtml(value) {
 }
 
 function renderMarkdown(markdown) {
-  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const lines = normalizeTeamRoomJsonBlocks(markdown).split("\n");
   const html = [];
   let paragraph = [];
   let list = null;
@@ -1830,6 +2689,50 @@ function renderMarkdown(markdown) {
   }
   closeBlocks();
   return html.join("");
+}
+
+function normalizeTeamRoomJsonBlocks(markdown) {
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  const normalized = [];
+  let inFence = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const fence = line.match(/^```(?:\w+)?\s*$/);
+    if (fence) {
+      inFence = !inFence;
+      normalized.push(line);
+      continue;
+    }
+
+    const start = line.trim().match(/^TEAMROOM_([A-Z_]+)_JSON_START$/);
+    if (!inFence && start) {
+      const blockType = start[1];
+      const block = [line.trim()];
+      i += 1;
+      while (i < lines.length) {
+        const current = lines[i];
+        block.push(current);
+        if (current.trim() === `TEAMROOM_${blockType}_JSON_END`) {
+          break;
+        }
+        i += 1;
+      }
+
+      if (normalized.length && normalized[normalized.length - 1].trim()) {
+        normalized.push("");
+      }
+      normalized.push("```json", ...block, "```");
+      if (i < lines.length - 1 && lines[i + 1]?.trim()) {
+        normalized.push("");
+      }
+      continue;
+    }
+
+    normalized.push(line);
+  }
+
+  return normalized.join("\n");
 }
 
 function isMarkdownTableStart(line, separatorLine) {

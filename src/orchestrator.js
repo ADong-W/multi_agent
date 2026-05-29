@@ -4,6 +4,8 @@ import { createId, nowIso } from "./utils.js";
 
 const AUTO_RETRY_DELAY_MS = 5000;
 const AUTO_RETRY_MAX_ATTEMPTS = 3;
+const INTERNAL_WAIT_DELAY_MS = 5000;
+const INTERNAL_WAIT_MAX_ATTEMPTS = 12;
 
 export class Orchestrator {
   constructor({ store, events, adapter }) {
@@ -12,6 +14,7 @@ export class Orchestrator {
     this.adapter = adapter;
     this.runningTasks = new Set();
     this.busyAgents = new Set();
+    this.runtimeApprovals = new Map();
   }
 
   async submitTask(roomId, request) {
@@ -115,11 +118,51 @@ export class Orchestrator {
       }
     }
     await this.store.updateTask(task);
+    await this.resolveTaskRuntimeApprovals(task.id, {
+      reply: "reject",
+      message: reason,
+      cancelled: true
+    });
     await this.events.publish(roomId, "task.cancelled", {
       taskId: task.id,
       reason
     });
     return task;
+  }
+
+  async recoverInternalPendingTasks() {
+    const rooms = await this.store.listRooms();
+    for (const room of rooms) {
+      const task = await this.store.getActiveTask(room.id);
+      if (!task || task.status !== "pending" || !isInternalOnlyPendingTask(task)) {
+        continue;
+      }
+      if (this.runningTasks.has(task.id)) {
+        continue;
+      }
+
+      const retryAt = new Date(Date.now() + INTERNAL_WAIT_DELAY_MS).toISOString();
+      task.status = "retrying";
+      task.error = null;
+      task.retryAt = retryAt;
+      task.retryReason = task.pendingReason || "待确认项仅包含内部流程状态，自动继续复核。";
+      await this.store.updateTask(task);
+      await this.events.publish(room.id, "task.wait_scheduled", {
+        taskId: task.id,
+        reason: task.retryReason,
+        waitingPoints: task.confirmationPoints || [],
+        attempt: 1,
+        maxAttempts: 1,
+        delayMs: INTERNAL_WAIT_DELAY_MS,
+        retryAt
+      });
+
+      setTimeout(() => {
+        this.resumeTask(task.id, "内部流程状态自动恢复：等待 agent 返回、后续派发或执行中状态不需要人工确认。").catch(async (error) => {
+          await this.failTask(task.id, error);
+        });
+      }, INTERNAL_WAIT_DELAY_MS);
+    }
   }
 
   async resumeTask(taskId, humanInstruction = "") {
@@ -181,6 +224,81 @@ export class Orchestrator {
       });
     });
     return true;
+  }
+
+  async requestRuntimeApproval({ roomId, task, stage, member, request }) {
+    const approvalId = createId("approval");
+    const approval = {
+      ...normalizeRuntimeApprovalRequest(request),
+      id: approvalId,
+      roomId,
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      status: "pending",
+      createdAt: nowIso()
+    };
+
+    approval.promise = new Promise((resolve) => {
+      approval.resolve = resolve;
+    });
+    this.runtimeApprovals.set(approvalId, approval);
+
+    const publicApproval = publicRuntimeApproval(approval);
+    stage.runtimeApproval = publicApproval;
+    task.runtimeApproval = publicApproval;
+    task.status = "approval_pending";
+    task.error = null;
+    await this.store.updateTask(task);
+    await this.events.publish(roomId, "runtime.approval_requested", {
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      approval: publicApproval
+    });
+
+    return approval.promise;
+  }
+
+  async respondRuntimeApproval(roomId, taskId, approvalId, response = {}) {
+    const approval = this.runtimeApprovals.get(approvalId);
+    if (!approval || approval.roomId !== roomId || approval.taskId !== taskId) {
+      const error = new Error(`Runtime approval not found: ${approvalId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    if (approval.status !== "pending") {
+      return { approval: publicRuntimeApproval(approval) };
+    }
+
+    const normalized = normalizeRuntimeApprovalResponse(approval, response);
+    approval.status = normalized.reply === "reject" ? "rejected" : "approved";
+    approval.response = normalized;
+    approval.resolvedAt = nowIso();
+    this.runtimeApprovals.delete(approvalId);
+
+    const task = await this.store.getTask(taskId);
+    if (task) {
+      task.runtimeApproval = publicRuntimeApproval(approval);
+      if (task.status === "approval_pending") {
+        task.status = "running";
+      }
+      const stage = task.stages?.find((item) => item.id === approval.stageId);
+      if (stage) {
+        stage.runtimeApproval = publicRuntimeApproval(approval);
+      }
+      await this.store.updateTask(task);
+    }
+
+    await this.events.publish(roomId, "runtime.approval_resolved", {
+      taskId,
+      stageId: approval.stageId,
+      agentId: approval.agentId,
+      approval: publicRuntimeApproval(approval)
+    });
+
+    approval.resolve(normalized);
+    return { approval: publicRuntimeApproval(approval) };
   }
 
   async runTask(taskId) {
@@ -282,6 +400,14 @@ export class Orchestrator {
             roomContext,
             taskMessages,
             resumeInstruction: task.resumeInstruction || ""
+          }, {
+            onApprovalRequest: (request) => this.requestRuntimeApproval({
+              roomId: room.id,
+              task,
+              stage,
+              member,
+              request
+            })
           });
         } catch (error) {
           const shouldRetry = await this.scheduleAutoRetry({
@@ -303,6 +429,11 @@ export class Orchestrator {
           await this.store.setMemberStatus(room.id, member.agentId, "idle");
           return;
         }
+        if (task.status === "approval_pending") {
+          task.status = "running";
+        }
+        task.runtimeApproval = null;
+        stage.runtimeApproval = null;
 
         stage.status = "completed";
         stage.completedAt = nowIso();
@@ -346,6 +477,20 @@ export class Orchestrator {
               summary: stage.result?.summary || ""
             });
             return;
+          }
+          if (reviewDecision.internalWait) {
+            previousOutputs.pop();
+            const shouldWait = await this.scheduleInternalWait({
+              roomId: room.id,
+              task,
+              stage,
+              member,
+              reason: reviewDecision.reason,
+              waitingPoints: reviewDecision.waitingPoints
+            });
+            if (shouldWait) {
+              continue;
+            }
           }
         }
 
@@ -405,7 +550,30 @@ export class Orchestrator {
         error: error.message
       });
     } finally {
+      await this.resolveTaskRuntimeApprovals(taskId, {
+        reply: "reject",
+        message: "Task finished before the runtime approval was resolved.",
+        cancelled: true
+      });
       this.runningTasks.delete(taskId);
+    }
+  }
+
+  async resolveTaskRuntimeApprovals(taskId, response) {
+    const approvals = [...this.runtimeApprovals.values()]
+      .filter((approval) => approval.taskId === taskId && approval.status === "pending");
+    for (const approval of approvals) {
+      approval.status = "cancelled";
+      approval.response = response;
+      approval.resolvedAt = nowIso();
+      this.runtimeApprovals.delete(approval.id);
+      approval.resolve(response);
+      await this.events.publish(approval.roomId, "runtime.approval_resolved", {
+        taskId: approval.taskId,
+        stageId: approval.stageId,
+        agentId: approval.agentId,
+        approval: publicRuntimeApproval(approval)
+      });
     }
   }
 
@@ -450,6 +618,60 @@ export class Orchestrator {
     });
 
     await sleep(AUTO_RETRY_DELAY_MS);
+    const latest = await this.store.getTask(task.id);
+    if (!latest || latest.status === "cancelled" || latest.cancelRequested) {
+      return true;
+    }
+    Object.assign(task, latest);
+    task.status = "running";
+    task.retryAt = null;
+    task.retryReason = null;
+    const latestStage = task.stages.find((item) => item.id === stage.id);
+    if (latestStage) {
+      Object.assign(stage, latestStage);
+      stage.retryAt = null;
+    }
+    await this.store.updateTask(task);
+    return true;
+  }
+
+  async scheduleInternalWait({ roomId, task, stage, member, reason, waitingPoints = [] }) {
+    const waitCount = Number(stage.internalWaitCount || 0);
+    if (waitCount >= INTERNAL_WAIT_MAX_ATTEMPTS) {
+      throw new Error("总控多次反馈仍在等待内部 Agent 返回，已停止自动等待。请检查 OpenClaw 中对应 Agent 的执行状态。");
+    }
+
+    const attempt = waitCount + 1;
+    const retryAt = new Date(Date.now() + INTERNAL_WAIT_DELAY_MS).toISOString();
+    this.busyAgents.delete(member.agentId);
+    await this.store.setMemberStatus(roomId, member.agentId, "idle");
+
+    stage.status = "queued";
+    stage.result = null;
+    stage.error = null;
+    stage.startedAt = null;
+    stage.completedAt = null;
+    stage.internalWaitCount = attempt;
+    stage.retryAt = retryAt;
+    task.status = "retrying";
+    task.error = null;
+    task.retryAt = retryAt;
+    task.retryReason = reason || "等待内部 Agent 返回结果。";
+    await this.store.updateTask(task);
+    await this.events.publish(roomId, "task.wait_scheduled", {
+      taskId: task.id,
+      stageId: stage.id,
+      agentId: member.agentId,
+      title: stage.title,
+      reason: task.retryReason,
+      waitingPoints,
+      attempt,
+      maxAttempts: INTERNAL_WAIT_MAX_ATTEMPTS,
+      delayMs: INTERNAL_WAIT_DELAY_MS,
+      retryAt
+    });
+
+    await sleep(INTERNAL_WAIT_DELAY_MS);
     const latest = await this.store.getTask(task.id);
     if (!latest || latest.status === "cancelled" || latest.cancelRequested) {
       return true;
@@ -600,6 +822,116 @@ function normalizeAgentResult(result) {
   };
 }
 
+function normalizeRuntimeApprovalRequest(request = {}) {
+  const type = request.type === "question" ? "question" : "permission";
+  if (type === "question") {
+    return {
+      type,
+      externalId: request.id || request.requestId || "",
+      sessionId: request.sessionId || request.sessionID || "",
+      title: request.title || "OpenCode 请求人工回答",
+      details: request.details || "",
+      questions: normalizeRuntimeQuestions(request.questions || []),
+      raw: request.raw || null
+    };
+  }
+
+  return {
+    type,
+    externalId: request.id || request.requestId || "",
+    sessionId: request.sessionId || request.sessionID || "",
+    title: request.title || "OpenCode 请求执行确认",
+    details: request.details || "",
+    permission: request.permission || "",
+    patterns: Array.isArray(request.patterns) ? request.patterns.map(String) : [],
+    canAlwaysAllow: Boolean(request.canAlwaysAllow),
+    tool: request.tool || null,
+    raw: request.raw || null
+  };
+}
+
+function normalizeRuntimeQuestions(questions) {
+  return (Array.isArray(questions) ? questions : [])
+    .map((question, index) => ({
+      header: String(question.header || `问题 ${index + 1}`).trim(),
+      question: String(question.question || question.header || "").trim(),
+      options: (Array.isArray(question.options) ? question.options : [])
+        .map((option, optionIndex) => ({
+          label: String(option.label || option.value || optionIndex + 1).trim(),
+          description: String(option.description || option.value || option.label || "").trim()
+        }))
+        .filter((option) => option.label || option.description),
+      multiple: Boolean(question.multiple),
+      custom: question.custom !== false
+    }))
+    .filter((question) => question.question || question.header);
+}
+
+function normalizeRuntimeApprovalResponse(approval, response = {}) {
+  const message = String(response.message || response.reason || "").trim();
+  if (approval.type === "question") {
+    return {
+      type: "question",
+      reply: "once",
+      answers: normalizeQuestionAnswerPayload(response.answers || response.answer || response.content),
+      message
+    };
+  }
+
+  const rawReply = String(response.reply || response.response || response.action || "").trim().toLowerCase();
+  const reply = ({
+    approve: "once",
+    approved: "once",
+    allow: "once",
+    once: "once",
+    yes: "once",
+    always: "always",
+    reject: "reject",
+    deny: "reject",
+    denied: "reject",
+    no: "reject"
+  })[rawReply] || (response.approved === false ? "reject" : "once");
+
+  return {
+    type: "permission",
+    reply: ["once", "always", "reject"].includes(reply) ? reply : "once",
+    message
+  };
+}
+
+function normalizeQuestionAnswerPayload(value) {
+  if (Array.isArray(value)) {
+    return value.map((answer) => Array.isArray(answer)
+      ? answer.map(String).filter(Boolean)
+      : [String(answer)].filter(Boolean));
+  }
+  const text = String(value || "").trim();
+  return text ? [[text]] : [];
+}
+
+function publicRuntimeApproval(approval) {
+  return {
+    id: approval.id,
+    externalId: approval.externalId || "",
+    type: approval.type,
+    sessionId: approval.sessionId || "",
+    taskId: approval.taskId,
+    stageId: approval.stageId,
+    agentId: approval.agentId,
+    title: approval.title,
+    details: approval.details || "",
+    permission: approval.permission || "",
+    patterns: approval.patterns || [],
+    questions: approval.questions || [],
+    canAlwaysAllow: Boolean(approval.canAlwaysAllow),
+    tool: approval.tool || null,
+    status: approval.status,
+    response: approval.response || null,
+    createdAt: approval.createdAt,
+    resolvedAt: approval.resolvedAt || null
+  };
+}
+
 function buildSupervisorDispatchInput({ room, task, member, previousOutputs, roomContext, taskMessages }) {
   const policy = normalizePolicy(room.policy);
   const templates = normalizePromptTemplates(policy.promptTemplates);
@@ -650,15 +982,11 @@ function buildSupervisorReviewInput({ room, task, member, previousOutputs, roomC
     policy,
     templates
   });
-  return [
-    renderTemplate(templates.supervisorReview, values),
-    "",
-    values.reviewJsonContract
-  ].join("\n");
+  return renderTemplate(templates.supervisorReview, values);
 }
 
 function buildPromptValues({ room, task, stage = {}, member, previousOutputs, roomContext, taskMessages, policy, templates }) {
-  return {
+  const values = {
     agentId: member.agentId,
     agentName: member.name || member.agentId,
     roomName: room.name,
@@ -675,8 +1003,6 @@ function buildPromptValues({ room, task, stage = {}, member, previousOutputs, ro
     stageNeeds: (stage.needs || []).join(", ") || "general",
     stageReason: stage.reason || "未指定。",
     resumeInstruction: task.resumeInstruction ? `续跑指令: ${task.resumeInstruction}` : "",
-    dispatchJsonContract: dispatchJsonContract(),
-    reviewJsonContract: reviewJsonContract(),
     supervisorExtraPrompt: policy.supervisorExtraPrompt ? `协作室自定义总控指导:\n${policy.supervisorExtraPrompt}` : "",
     specialistExtraPrompt: policy.specialistExtraPrompt ? `协作室自定义子 Agent 指导:\n${policy.specialistExtraPrompt}` : "",
     reviewExtraPrompt: policy.reviewExtraPrompt ? `协作室自定义复核指导:\n${policy.reviewExtraPrompt}` : "",
@@ -684,53 +1010,12 @@ function buildPromptValues({ room, task, stage = {}, member, previousOutputs, ro
       ? "注意: 如果你不输出可解析 JSON，TeamRoom 不会兜底安排任何子 agent。"
       : ""
   };
-}
 
-function reviewJsonContract() {
-  return [
-    "重要输出要求:",
-    "- 你是本次任务最后的审核人。",
-    "- 如果最终结论中仍存在需要 BA、业务方、用户或人工确认/澄清/补充的信息，任务不能自动完成。",
-    "- 这种情况下请把 status 设为 pending，并把确认问题写入 confirmation_points。",
-    "- 如果没有任何人工确认点，请把 status 设为 completed，confirmation_points 为空数组。",
-    "",
-    "请在回答末尾包含下面这个机器可读 JSON 块，TeamRoom 会据此判断任务是否完成:",
-    "TEAMROOM_REVIEW_JSON_START",
-    JSON.stringify({
-      status: "completed",
-      summary: "一句话最终审核结论",
-      confirmation_points: []
-    }, null, 2),
-    "TEAMROOM_REVIEW_JSON_END"
-  ].join("\n");
-}
-
-function dispatchJsonContract() {
-  return [
-    "重要约束:",
-    "- TeamRoom 只负责协作管控和可视化，业务拆题权在你这里。",
-    "- 只从上面的可调度成员中选择 agent_id。",
-    "- 不要为了热闹而安排无关 agent；如果某类交付件不受影响，可以不安排。",
-    "- 如果无法判断需要哪个专业 agent，请返回空的 subtasks，并把问题写入 confirmation_points，不要把任务派给所有 agent 当作兜底。",
-    "- 如果存在需要 BA 或业务方确认的点，请写入 confirmation_points。",
-    "",
-    "请在回答中包含下面这个机器可读 JSON 块，TeamRoom 会据此派发子任务:",
-    "TEAMROOM_DISPATCH_JSON_START",
-    JSON.stringify({
-      summary: "一句话说明需求和影响范围",
-      subtasks: [
-        {
-          agent_id: "agent_2",
-          title: "维度与模型影响分析",
-          goal: "说明要交给该 agent 的具体任务",
-          needs: ["dimension", "model"],
-          reason: "为什么需要该 agent 参与"
-        }
-      ],
-      confirmation_points: ["需要人工确认的问题"]
-    }, null, 2),
-    "TEAMROOM_DISPATCH_JSON_END"
-  ].join("\n");
+  return {
+    ...values,
+    dispatchJsonContract: renderTemplate(templates.dispatchJsonContract, values),
+    reviewJsonContract: renderTemplate(templates.reviewJsonContract, values)
+  };
 }
 
 function formatRoomContext(roomContext = [], templates = {}) {
@@ -839,6 +1124,12 @@ function parseDispatchJson(text) {
 
 function parseSupervisorReviewDecision(text) {
   const parsed = parseReviewJson(text);
+  const rawParsedPoints = normalizeConfirmationPointCandidates(
+    parsed?.confirmation_points
+    || parsed?.confirmationPoints
+    || parsed?.confirmations
+    || parsed?.questions
+  );
   const parsedPoints = normalizeConfirmationPoints(
     parsed?.confirmation_points
     || parsed?.confirmationPoints
@@ -846,13 +1137,28 @@ function parseSupervisorReviewDecision(text) {
     || parsed?.questions
   );
   const parsedStatus = String(parsed?.status || "").trim().toLowerCase();
-  const heuristicPoints = inferConfirmationPoints(stripReviewJsonBlock(text));
-  if (parsedStatus === "pending" || parsedPoints.length > 0 || heuristicPoints.length > 0) {
+  const readableText = stripReviewJsonBlock(text);
+  const heuristicPoints = inferConfirmationPoints(readableText);
+  const waitingPoints = rawParsedPoints.filter((point) => isInternalWorkflowConfirmation(point));
+  const internalWait = isInternalWaitStatus(parsedStatus)
+    || hasInternalWaitSignal(readableText)
+    || (rawParsedPoints.length > 0 && waitingPoints.length === rawParsedPoints.length && parsedPoints.length === 0);
+
+  if (parsedPoints.length > 0 || heuristicPoints.length > 0) {
     const confirmationPoints = parsedPoints.length ? parsedPoints : heuristicPoints;
     return {
       pending: true,
       reason: parsed?.summary || parsed?.reason || "总控审核认为仍存在需要人工确认的点。",
       confirmationPoints: confirmationPoints.length ? confirmationPoints : ["总控审核认为仍存在需要人工确认的点。"]
+    };
+  }
+  if (internalWait) {
+    return {
+      pending: false,
+      internalWait: true,
+      reason: parsed?.summary || parsed?.reason || "等待内部 Agent 返回结果。",
+      confirmationPoints: [],
+      waitingPoints: waitingPoints.length ? waitingPoints : extractInternalWaitingPoints(readableText)
     };
   }
   if (["completed", "complete", "done"].includes(parsedStatus)) {
@@ -864,9 +1170,9 @@ function parseSupervisorReviewDecision(text) {
   }
 
   return {
-    pending: heuristicPoints.length > 0,
-    reason: heuristicPoints.length > 0 ? "总控审核认为仍存在需要人工确认的点。" : "总控审核确认无需人工补充。",
-    confirmationPoints: heuristicPoints
+    pending: false,
+    reason: "总控审核确认无需人工补充。",
+    confirmationPoints: []
   };
 }
 
@@ -885,6 +1191,12 @@ function stripReviewJsonBlock(text) {
 }
 
 function normalizeConfirmationPoints(value) {
+  return normalizeConfirmationPointCandidates(value)
+    .filter((item) => !isNegativeConfirmationText(item))
+    .filter(isHumanActionableConfirmationPoint);
+}
+
+function normalizeConfirmationPointCandidates(value) {
   if (Array.isArray(value)) {
     return value
       .map((item) => String(item || "").trim())
@@ -915,7 +1227,7 @@ function inferConfirmationPoints(text) {
   }
   const tablePoints = extractConfirmationTablePoints(source);
   if (tablePoints.length > 0) {
-    return tablePoints;
+    return tablePoints.filter(isHumanActionableConfirmationPoint);
   }
   const lines = source
     .split("\n")
@@ -926,7 +1238,7 @@ function inferConfirmationPoints(text) {
   const pointLines = lines.filter((line) => (
     /(确认|澄清|补充|待定|待确认|待回答|需要|需\s*|回答|决策|选择|决定)/.test(line)
     && /(BA|业务方|人工|人为|用户|你|确认|澄清|补充|回答|决策|选择|决定)/i.test(line)
-  ));
+  )).filter(isHumanActionableConfirmationPoint);
   if (pointLines.length > 0) {
     return pointLines.slice(0, 6);
   }
@@ -954,12 +1266,82 @@ function extractConfirmationTablePoints(text) {
 
 function hasHumanConfirmationSignal(text) {
   const source = String(text || "");
-  return /确认点汇总|等待业务定义澄清|需\s*(?:BA|业务方|人工|人为|用户|你)(?:\s*\/\s*(?:BA|业务方|人工|用户|你))*\s*(?:回答|确认|澄清|补充|决策|选择|决定)|(?:需要|需|待).{0,16}(?:BA|业务方|人工|人为|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)|(?:请|由).{0,8}(?:BA|业务方|人工|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)|待确认|待回答|confirmation_points/i.test(source);
+  return /确认点汇总|等待业务定义澄清|需\s*(?:BA|业务方|人工|人为|用户|你)(?:\s*\/\s*(?:BA|业务方|人工|用户|你))*\s*(?:回答|确认|澄清|补充|决策|选择|决定)|(?:需要|需|待).{0,16}(?:BA|业务方|人工|人为|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)|(?:请|由).{0,8}(?:BA|业务方|人工|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)/i.test(source);
 }
 
 function extractConfirmationSection(text) {
   const match = String(text || "").match(/(?:需(?:要)?\s*(?:BA|业务方|人工|用户|你).{0,16}(?:回答|确认|澄清|补充).{0,12}|确认(?:的问题|点)|待(?:确认|回答)|confirmation_points)[\s\S]*?(?=\n#{1,6}\s|\n---|\n下一步|$)/i);
   return match ? match[0] : "";
+}
+
+function isHumanActionableConfirmationPoint(text) {
+  const source = String(text || "").trim();
+  if (!source || isNegativeConfirmationText(source)) {
+    return false;
+  }
+  if (hasExplicitHumanActor(source) && hasDecisionVerb(source)) {
+    return true;
+  }
+  if (isInternalWorkflowConfirmation(source)) {
+    return false;
+  }
+  return /[？?]|哪个|哪一|哪种|是否|要不要|需不需要|是什么|多少|如何|怎样|编码|父项|归属|范围|口径|规则|选项|方案/i.test(source);
+}
+
+function hasExplicitHumanActor(text) {
+  return /BA|业务方|业务用户|业务人员|人工|人为|用户|你|人来|人手动/i.test(String(text || ""));
+}
+
+function hasDecisionVerb(text) {
+  return /回答|确认|澄清|补充|决策|选择|决定|提供|指定|明确/i.test(String(text || ""));
+}
+
+function isInternalWorkflowConfirmation(text) {
+  const source = String(text || "");
+  if (!source.trim()) {
+    return false;
+  }
+  if (hasExplicitHumanActor(source)) {
+    return false;
+  }
+  const hasBusinessQuestion = /[？?]|哪个|哪一|哪种|是否|要不要|需不需要|是什么|多少|如何|怎样|编码|父项|归属|范围|口径|规则|选项|方案/i.test(source);
+  const hardInternal = /等待|待.*返回|尚未返回|正在|执行中|运行中|验证结果|最终验证|返回结果|返回执行结果|完成后|通过后|后续|下游|派发|调度|回调|继续执行|重试|连接|断开|OpenClaw/i.test(source);
+  if (hasBusinessQuestion && !hardInternal) {
+    return false;
+  }
+  return hardInternal || /子\s*Agent|agent[_-]|_agent|dim-model|supervisor_agent|dimension_agent|form_agent|permission_agent/i.test(source);
+}
+
+function isInternalWaitStatus(status) {
+  return ["waiting", "wait", "running", "in_progress", "processing", "retrying"].includes(String(status || "").trim().toLowerCase());
+}
+
+function hasInternalWaitSignal(text) {
+  const source = String(text || "");
+  return /等待|待.*返回|尚未返回|正在.{0,12}(?:执行|运行|验证)|执行中|运行中|验证结果|返回结果|返回执行结果|最终验证|尚未完成|未完成全部轮次|不可提前关闭|子\s*Agent|agent[_-]|_agent|dim-model/i.test(source)
+    && !/(?:BA|业务方|业务用户|人工|用户|你).{0,16}(?:回答|确认|澄清|补充|决策|选择|决定)/i.test(source);
+}
+
+function extractInternalWaitingPoints(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean)
+    .filter(isInternalWorkflowConfirmation)
+    .slice(0, 4);
+}
+
+function isInternalOnlyPendingTask(task) {
+  const points = normalizeConfirmationPointCandidates(task?.confirmationPoints || []);
+  if (points.length === 0) {
+    return false;
+  }
+  const humanPoints = points.filter(isHumanActionableConfirmationPoint);
+  if (humanPoints.length > 0) {
+    return false;
+  }
+  return points.every(isInternalWorkflowConfirmation)
+    || hasInternalWaitSignal(task?.pendingReason || "");
 }
 
 function sectionHasNoConfirmation(section) {
@@ -1156,7 +1538,7 @@ function firstIncompleteStageIndex(stages = []) {
 
 function isRecoverableOpenClawError(error) {
   const message = String(error?.message || error || "");
-  return /OpenClaw gateway (?:connection closed|is not connected|request timed out|websocket upgrade failed)|OpenClaw chat run timed out|device nonce mismatch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|network/i.test(message);
+  return /OpenClaw gateway (?:connection closed|is not connected|request timed out|websocket upgrade failed)|OpenClaw chat run timed out|OpenCode request (?:failed|timed out)|device nonce mismatch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|network/i.test(message);
 }
 
 function sleep(ms) {

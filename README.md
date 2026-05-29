@@ -11,7 +11,7 @@ The project is intentionally small for company intranet deployment:
 - no Next.js runtime
 - no external npm dependencies for the MVP
 - static web UI served by the same Node process
-- replaceable OpenClaw adapter
+- replaceable OpenClaw / OpenCode adapter
 
 ## Why This Exists
 
@@ -96,6 +96,60 @@ For example, if `TEAMROOM_PORT=8786`, open:
 http://127.0.0.1:8786
 ```
 
+## Connect To Your Local OpenCode
+
+If your company cannot use OpenClaw but can run [OpenCode](https://opencode.ai/docs/server/), TeamRoom can use OpenCode as the execution backend through `TEAMROOM_ADAPTER=opencode`.
+
+1. Restart the OpenCode server. This starts only the OpenCode backend/API, not the TeamRoom UI:
+
+```bash
+opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+2. Restart TeamRoom in another terminal. This command must run inside the TeamRoom project directory because `npm start` needs this repository's `package.json`.
+
+macOS / Linux example:
+
+```bash
+cd /Users/adong/multi_agent
+
+TEAMROOM_PORT=8786 \
+TEAMROOM_ADAPTER=opencode \
+OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+Windows cmd example:
+
+```cmd
+cd /d D:\multi_agent
+
+set TEAMROOM_PORT=8786
+set TEAMROOM_ADAPTER=opencode
+set OPENCODE_BASE_URL=http://127.0.0.1:4096
+
+npm start
+```
+
+3. Open the TeamRoom UI, not the OpenCode server URL:
+
+```text
+http://127.0.0.1:8786
+```
+
+Note: `http://127.0.0.1:4096` is the OpenCode server address, not the TeamRoom frontend. If OpenCode is not running, TeamRoom cannot load the Agents list.
+
+Optional model override:
+
+```bash
+OPENCODE_PROVIDER=anthropic \
+OPENCODE_MODEL=claude-sonnet-4-5 \
+TEAMROOM_ADAPTER=opencode \
+npm start
+```
+
+TeamRoom calls OpenCode through `/agent`, `/session`, and `/session/{sessionID}/message`. By default it reuses one OpenCode session per room and agent so the same specialist keeps context inside a room. If you open `http://127.0.0.1:4096` directly, you are opening OpenCode's own server surface, not this TeamRoom frontend.
+
 ## OpenClaw Integration Shape
 
 The implementation has a narrow adapter boundary:
@@ -106,7 +160,7 @@ TeamRoom core
   -> adapter.runAgent(agentId, input, context)
 ```
 
-For a real OpenClaw deployment, implement those two calls in `src/adapters/openclaw-http.js` or mount the core from an OpenClaw native plugin. The rest of the room, policy, state, and UI code stays unchanged.
+For a real backend deployment, implement those two calls in an adapter such as `src/adapters/openclaw-http.js` or `src/adapters/opencode.js`. The rest of the room, policy, state, and UI code stays unchanged.
 
 ## Agent Profiles
 
@@ -167,6 +221,17 @@ npm start
 
 This mode discovers existing OpenClaw agents from `/v1/models`, then runs a selected agent through `/v1/responses` using the model name `openclaw/<agentId>`.
 
+OpenCode server mode:
+
+```bash
+cd xxx/multi_agent
+TEAMROOM_ADAPTER=opencode \
+OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+npm start
+```
+
+Use this mode after starting `opencode serve`. It discovers OpenCode agents from `/agent`, creates or reuses OpenCode sessions through `/session`, and sends stage prompts through `/session/{sessionID}/message`. Open the TeamRoom port, for example `http://127.0.0.1:8787`, rather than the OpenCode port `4096`.
+
 Useful environment variables:
 
 ```text
@@ -174,7 +239,7 @@ TEAMROOM_HOST=127.0.0.1
 TEAMROOM_PORT=8787
 TEAMROOM_DATA_FILE=./data/teamroom.json
 TEAMROOM_TOKEN=optional-shared-token
-TEAMROOM_ADAPTER=mock | openclaw-gateway | openclaw-http | openclaw-responses
+TEAMROOM_ADAPTER=mock | opencode | openclaw-gateway | openclaw-http | openclaw-responses
 OPENCLAW_BASE_URL=http://127.0.0.1:3000
 OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
 OPENCLAW_DEVICE_FILE=./data/openclaw-device.json
@@ -186,6 +251,15 @@ OPENCLAW_MODELS_PATH=/v1/models
 OPENCLAW_RESPONSES_PATH=/v1/responses
 OPENCLAW_TOKEN=optional-openclaw-token
 OPENCLAW_PASSWORD=optional-openclaw-password
+OPENCODE_BASE_URL=http://127.0.0.1:4096
+OPENCODE_DIRECTORY=optional-project-directory
+OPENCODE_WORKSPACE=optional-opencode-workspace
+OPENCODE_PROVIDER=optional-provider-id
+OPENCODE_MODEL=optional-model-id
+OPENCODE_VARIANT=optional-model-variant
+OPENCODE_TIMEOUT_MS=180000
+OPENCODE_SESSION_STRATEGY=per-agent-room | per-task | per-stage
+OPENCODE_INCLUDE_HIDDEN_AGENTS=false
 ```
 
 If `TEAMROOM_TOKEN` is set, API requests must send:
@@ -237,7 +311,7 @@ curl -X POST http://127.0.0.1:8787/api/rooms/<roomId>/tasks \
 ```text
 public/                 Static UI
 src/
-  adapters/             OpenClaw and mock adapters
+  adapters/             OpenClaw, OpenCode, and mock adapters
   plugin/               Native plugin mounting sketch
   config.js             Runtime config
   events.js             In-process SSE hub
