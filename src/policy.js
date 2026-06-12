@@ -3,6 +3,7 @@ import { normalizePromptTemplates } from "./prompt-templates.js";
 
 const ROLE_NEEDS = {
   supervisor_dispatch: ["supervisor", "leader", "planning", "analysis"],
+  supervisor_chat: ["supervisor", "leader", "analysis", "communication"],
   specialist_work: ["specialist", "domain", "general"],
   supervisor_review: ["supervisor", "leader", "review", "summary"],
   analysis: ["analysis", "research", "domain"],
@@ -78,6 +79,15 @@ export function createTaskGraph({ goal, policy, requestedStages = [] }) {
   }
 
   if (normalizePolicy(policy).mode === "supervisor") {
+    if (isConversationalGoal(goal)) {
+      return [
+        {
+          type: "supervisor_chat",
+          title: "Supervisor Conversation",
+          needs: ["supervisor", "analysis", "communication"]
+        }
+      ].map((stage, index) => normalizeStage(stage, index));
+    }
     return [
       {
         type: "supervisor_dispatch",
@@ -123,6 +133,25 @@ export function createTaskGraph({ goal, policy, requestedStages = [] }) {
   return stages.map((stage, index) => normalizeStage(stage, index));
 }
 
+function isConversationalGoal(goal) {
+  const text = String(goal || "").trim();
+  if (!text) {
+    return false;
+  }
+  const lower = text.toLowerCase();
+  const explicitConversationStart = /^(?:对话|复盘|讨论|聊聊|解释|分析一下|帮我复盘|帮我解释|帮我分析|只讨论|仅讨论|不要执行|不执行)(?:一下|下)?/i.test(text);
+  if (explicitConversationStart) {
+    return true;
+  }
+  const explicitConversation = /^(?:对话|复盘|讨论|聊聊|解释|分析一下|帮我复盘|帮我解释|帮我分析|只讨论|仅讨论|不要执行|不执行)\s*[:：]/i.test(text)
+    || /(复盘一下|复盘下|聊聊|讨论一下|解释一下|帮我理解|为什么会|原因是什么|机制是什么|原理是什么|给我建议|有什么建议|你怎么看)/i.test(text);
+  if (!explicitConversation) {
+    return false;
+  }
+  const executionIntent = /(新增|添加|修改|删除|写入|刷新|更新|生成|创建|检查.*文件|校验.*文件|落盘|覆写|备份|派发|调度|执行|跑一下|run|write|update|create|delete|dispatch)/i.test(lower);
+  return !executionIntent;
+}
+
 export function assignStages({ room, task, busy = new Set() }) {
   const policy = normalizePolicy(room.policy);
   const assignmentCounts = new Map();
@@ -156,7 +185,7 @@ export function selectAgent({ room, stage, policy, index, busy = new Set(), assi
   }
 
   if (policy.mode === "supervisor") {
-    if (["supervisor_dispatch", "supervisor_review"].includes(stage.type)) {
+    if (["supervisor_dispatch", "supervisor_review", "supervisor_chat"].includes(stage.type)) {
       return findSupervisorMember(members);
     }
     return findNonSupervisorMember(members, index) || findSupervisorMember(members);

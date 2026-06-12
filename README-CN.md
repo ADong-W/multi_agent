@@ -114,6 +114,8 @@ cd /Users/adong/multi_agent
 TEAMROOM_PORT=8786 \
 TEAMROOM_ADAPTER=opencode \
 OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+OPENCODE_DIRECTORY=/Users/wicky/Documents/Codex/2026-06-08/openclaw-opencode-openclaw-agent-agent-agent/opencode_foxagent \
+OPENCODE_WORKSPACE=/Users/wicky/Documents/Codex/2026-06-08/openclaw-opencode-openclaw-agent-agent-agent/opencode_foxagent \
 npm start
 ```
 
@@ -147,6 +149,8 @@ npm start
 ```
 
 TeamRoom 会调用 OpenCode 的 `/agent`、`/session`、`/session/{sessionID}/message`。默认同一个协作室里的同一个 agent 会复用一个 OpenCode session，从而保留房间内上下文。如果你直接打开 `http://127.0.0.1:4096`，进入的是 OpenCode 自己的 server 页面，不是 TeamRoom 前端。
+
+这版 TeamRoom 会接管跨 Agent 调度。总控只输出 `TEAMROOM_DISPATCH_JSON`，不能直接调用 OpenCode `task`/subagent；TeamRoom 再把精简后的需求解析、上一位子 Agent 摘要和本轮 Payload 发送给目标 Agent。OpenCode 的工具权限和问题请求会在 TeamRoom 对话区显示为确认卡片。
 
 ## OpenClaw 集成方式
 

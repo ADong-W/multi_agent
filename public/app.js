@@ -1,7 +1,6 @@
 const state = {
   token: localStorage.getItem("teamroom.token") || "",
   agents: [],
-  agentLoadError: "",
   rooms: [],
   activeRoomId: localStorage.getItem("teamroom.activeRoomId") || "",
   activeRoom: null,
@@ -21,6 +20,7 @@ const state = {
   promptPlaceholders: [],
   source: null,
   sourceRoomId: "",
+  reconnectingOpenClaw: false,
   activePromptTemplateKey: localStorage.getItem("teamroom.activePromptTemplateKey") || "supervisorDispatch"
 };
 
@@ -40,8 +40,6 @@ const PROMPT_TEMPLATE_KEYS = [
   "supervisorDispatch",
   "specialistWork",
   "supervisorReview",
-  "dispatchJsonContract",
-  "reviewJsonContract",
   "previousOutputItem",
   "roomContextItem",
   "taskMessageItem"
@@ -71,22 +69,6 @@ const PROMPT_TEMPLATE_META = [
     tone: "汇总审核与人工确认判定",
     description: "所有子 Agent 返回后，发送给总控 Agent，用于最终审核、判断 completed / pending / waiting。",
     textarea: "supervisorReviewTemplateInput"
-  },
-  {
-    key: "dispatchJsonContract",
-    title: "派工 JSON 协议",
-    group: "协议模板",
-    tone: "派工机器可读输出",
-    description: "注入到 Supervisor 派工模板，约束总控输出 TEAMROOM_DISPATCH_JSON_START / END JSON 块。",
-    textarea: "dispatchJsonContractTemplateInput"
-  },
-  {
-    key: "reviewJsonContract",
-    title: "终审 JSON 协议",
-    group: "协议模板",
-    tone: "终审状态判定",
-    description: "注入到 Supervisor 终审模板，约束总控输出 completed / pending / waiting 与确认点 JSON。",
-    textarea: "reviewJsonContractTemplateInput"
   },
   {
     key: "previousOutputItem",
@@ -131,8 +113,8 @@ const PROMPT_VARIABLE_GUIDE = [
   ["stageNeeds", "当前阶段需要的能力标签。"],
   ["stageReason", "总控把任务派给该 Agent 的原因。"],
   ["resumeInstruction", "任务中断后继续执行时注入的续跑说明。"],
-  ["dispatchJsonContract", "派工 JSON 协议模板的渲染结果，会注入到 Supervisor 派工主模板。"],
-  ["reviewJsonContract", "终审 JSON 协议模板的渲染结果，会注入到 Supervisor 终审主模板。"],
+  ["dispatchJsonContract", "Supervisor 派工阶段必须遵守的机器可读 JSON 输出格式。"],
+  ["reviewJsonContract", "Supervisor 终审阶段必须遵守的机器可读 JSON 输出格式。"],
   ["supervisorExtraPrompt", "协作策略里追加给总控阶段的自定义提示。"],
   ["specialistExtraPrompt", "协作策略里追加给专业子 Agent 阶段的自定义提示。"],
   ["reviewExtraPrompt", "协作策略里追加给总控终审阶段的自定义提示。"],
@@ -149,6 +131,7 @@ const PROMPT_VARIABLE_GUIDE = [
 
 const STAGE_TITLE_LABELS = {
   "Supervisor Dispatch": "需求分析·任务拆解",
+  "Supervisor Conversation": "总控对话",
   "Supervisor Review": "任务汇总审核"
 };
 
@@ -200,6 +183,7 @@ const PROFILE_PRESETS = [
 const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
   shell: document.querySelector(".shell"),
+  reconnectOpenClawButton: document.querySelector("#reconnectOpenClawButton"),
   openConfigButton: document.querySelector("#openConfigButton"),
   closeConfigButton: document.querySelector("#closeConfigButton"),
   configView: document.querySelector("#configView"),
@@ -224,8 +208,6 @@ const els = {
   supervisorDispatchTemplateInput: document.querySelector("#supervisorDispatchTemplateInput"),
   specialistWorkTemplateInput: document.querySelector("#specialistWorkTemplateInput"),
   supervisorReviewTemplateInput: document.querySelector("#supervisorReviewTemplateInput"),
-  dispatchJsonContractTemplateInput: document.querySelector("#dispatchJsonContractTemplateInput"),
-  reviewJsonContractTemplateInput: document.querySelector("#reviewJsonContractTemplateInput"),
   previousOutputItemTemplateInput: document.querySelector("#previousOutputItemTemplateInput"),
   roomContextItemTemplateInput: document.querySelector("#roomContextItemTemplateInput"),
   taskMessageItemTemplateInput: document.querySelector("#taskMessageItemTemplateInput"),
@@ -270,6 +252,10 @@ window.addEventListener("resize", () => {
 
 els.refreshAgentsButton.addEventListener("click", () => {
   loadAgents();
+});
+
+els.reconnectOpenClawButton.addEventListener("click", async () => {
+  await reconnectOpenClaw();
 });
 
 els.createRoomButton.addEventListener("click", () => {
@@ -414,6 +400,32 @@ async function submitHumanContent(content, { restoreOnError } = {}) {
   }
 }
 
+async function reconnectOpenClaw() {
+  if (!state.activeRoomId || state.reconnectingOpenClaw) {
+    return;
+  }
+  const runningStage = runningStageForActiveTask();
+  if (runningStage && !window.confirm("当前有阶段正在执行。手动重连会刷新执行后端连接，并可能让该阶段进入自动续接。继续重连吗？")) {
+    return;
+  }
+  state.reconnectingOpenClaw = true;
+  setConnection("Reconnecting");
+  renderTopbarActions();
+  try {
+    await api(`/api/rooms/${state.activeRoomId}/runtime/reconnect`, {
+      method: "POST",
+      body: {}
+    });
+    setConnection("Connected");
+    await Promise.all([loadAgents(), loadActiveRoom()]);
+  } catch (error) {
+    setConnection(error.message || "执行后端重连失败");
+  } finally {
+    state.reconnectingOpenClaw = false;
+    renderTopbarActions();
+  }
+}
+
 els.cancelTaskButton.addEventListener("click", async () => {
   const task = activeTask();
   if (!state.activeRoomId || !task) {
@@ -547,14 +559,8 @@ async function saveTeamRoomPolicyConfig() {
 }
 
 async function loadAgents() {
-  try {
-    const payload = await api("/api/agents");
-    state.agents = payload.agents || [];
-    state.agentLoadError = "";
-  } catch (error) {
-    state.agents = [];
-    state.agentLoadError = error.message || "Agent 加载失败";
-  }
+  const payload = await api("/api/agents");
+  state.agents = payload.agents || [];
   renderAgents();
 }
 
@@ -575,6 +581,7 @@ async function loadActiveRoom() {
   try {
     const payload = await api(`/api/rooms/${state.activeRoomId}`);
     state.activeRoom = payload.room;
+    upsertRoomInList(payload.room);
     state.tasks = payload.tasks || [];
     localStorage.setItem("teamroom.activeRoomId", state.activeRoomId);
     connectEvents();
@@ -584,6 +591,18 @@ async function loadActiveRoom() {
     state.activeRoom = null;
     state.tasks = [];
     render();
+  }
+}
+
+function upsertRoomInList(room) {
+  if (!room?.id) {
+    return;
+  }
+  const index = state.rooms.findIndex((item) => item.id === room.id);
+  if (index >= 0) {
+    state.rooms[index] = room;
+  } else {
+    state.rooms.unshift(room);
   }
 }
 
@@ -615,6 +634,11 @@ function connectEvents() {
   const eventNames = [
     "room.created",
     "room.policy_updated",
+    "runtime.reconnect_started",
+    "runtime.reconnect_completed",
+    "runtime.reconnect_failed",
+    "runtime.approval_requested",
+    "runtime.approval_resolved",
     "member.added",
     "member.removed",
     "message.created",
@@ -624,15 +648,21 @@ function connectEvents() {
     "task.pending",
     "task.retry_scheduled",
     "task.wait_scheduled",
+    "task.delivered",
+    "task.audit_completed",
     "task.completed",
     "task.failed",
     "task.cancelled",
     "task.resumed",
     "task.resume_skipped",
-    "runtime.approval_requested",
-    "runtime.approval_resolved",
     "stage.assigned",
     "stage.running",
+    "stage.progress",
+    "stage.stream",
+    "stage.awaiting_agent",
+    "stage.result_received",
+    "stage.review_decision",
+    "stage.auto_continue",
     "stage.completed",
     "stage.failed"
   ];
@@ -651,6 +681,22 @@ function appendLocalEvent(event) {
   if (!event?.id || state.events.some((item) => item.id === event.id)) {
     return;
   }
+  if (event.type === "stage.stream") {
+    const segmentKey = streamSegmentKey(event);
+    const segmentCount = Number(event.payload?.streamSegment?.segmentCount || 0);
+    state.events = state.events.filter((item) => !(
+      item.type === "stage.stream"
+      && item.taskId === event.taskId
+      && item.stageId === event.stageId
+      && streamSegmentKey(item) === segmentKey
+    ) && !(
+      item.type === "stage.stream"
+      && segmentCount > 0
+      && item.taskId === event.taskId
+      && item.stageId === event.stageId
+      && Number(streamSegmentKey(item)) >= segmentCount
+    ));
+  }
   if (isLocalEvent(event) && state.events.some((item) => isMatchingServerMessage(item, event))) {
     return;
   }
@@ -660,6 +706,11 @@ function appendLocalEvent(event) {
   state.events.push(event);
   state.events = state.events.slice(-150);
   renderEvents();
+}
+
+function streamSegmentKey(event = {}) {
+  const segment = event.payload?.streamSegment || {};
+  return String(segment.segmentIndex ?? event.payload?.segmentIndex ?? 0);
 }
 
 function createLocalMessageEvent(content) {
@@ -714,6 +765,7 @@ function setConnection(text) {
 }
 
 function render() {
+  renderTopbarActions();
   renderRooms();
   renderAgents();
   renderActiveRoom();
@@ -724,6 +776,18 @@ function render() {
   }
 }
 
+function renderTopbarActions() {
+  if (!els.reconnectOpenClawButton) {
+    return;
+  }
+  els.reconnectOpenClawButton.disabled = !state.activeRoomId || state.reconnectingOpenClaw;
+  els.reconnectOpenClawButton.classList.toggle("loading", state.reconnectingOpenClaw);
+  const label = els.reconnectOpenClawButton.querySelector(".reconnect-label");
+  if (label) {
+    label.textContent = state.reconnectingOpenClaw ? "重连中" : "重连";
+  }
+}
+
 function renderRooms() {
   const previousScrollTop = els.roomsList.scrollTop;
   if (!state.rooms.length) {
@@ -731,7 +795,8 @@ function renderRooms() {
     return;
   }
   els.roomsList.innerHTML = state.rooms.map((room) => {
-    const members = room.members || [];
+    const displayRoom = state.activeRoom?.id === room.id ? state.activeRoom : room;
+    const members = displayRoom.members || [];
     const expanded = state.expandedRooms.has(room.id);
     return `
     <article class="room-card ${room.id === state.activeRoomId ? "active" : ""} ${expanded ? "expanded" : ""}" data-room-card="${escapeHtml(room.id)}">
@@ -743,10 +808,14 @@ function renderRooms() {
         <button type="button" class="danger-button" data-delete-room="${escapeHtml(room.id)}" title="删除协作室">删除</button>
       </div>
       <div class="room-body">
+        <div class="room-id-row">
+          <span>协作室 ID</span>
+          <code>${escapeHtml(displayRoom.id)}</code>
+        </div>
         <div class="meta">共 ${members.length} 个 agents</div>
         <div class="room-member-list">
           ${members.length
-            ? members.map((member) => `<span class="room-member-chip">${escapeHtml(member.name || member.agentId)}</span>`).join("")
+            ? members.map((member) => `<span class="room-member-chip" title="${escapeHtml(member.agentId || member.name || "")}">${escapeHtml(member.name || member.agentId)}</span>`).join("")
             : `<span class="room-member-chip muted">暂无成员</span>`}
         </div>
       </div>
@@ -800,10 +869,6 @@ function renderRooms() {
 }
 
 function renderAgents() {
-  if (state.agentLoadError) {
-    els.agentsList.innerHTML = `<div class="empty">Agent 加载失败：${escapeHtml(state.agentLoadError)}</div>`;
-    return;
-  }
   if (!state.agents.length) {
     els.agentsList.innerHTML = `<div class="empty">暂无 agents</div>`;
     return;
@@ -821,9 +886,11 @@ function renderAgents() {
         <button
           type="button"
           class="agent-add-button ${isMember ? "is-member" : ""}"
-          data-add-agent="${escapeHtml(agent.id)}"
-          ${!state.activeRoomId || isMember ? "disabled" : ""}
-        >${isMember ? "在室" : "拉入"}</button>
+          data-agent-membership="${escapeHtml(agent.id)}"
+          data-is-member="${isMember ? "true" : "false"}"
+          ${!state.activeRoomId ? "disabled" : ""}
+          title="${isMember ? "从当前协作室移出" : "拉入当前协作室"}"
+        >${isMember ? "移出" : "拉入"}</button>
       </div>
       <div class="agent-body">
         <div class="meta">${escapeHtml(agent.id)} · ${agent.profileSource === "local" ? "本地标签" : "OpenClaw 推断"}</div>
@@ -854,8 +921,8 @@ function renderAgents() {
           ${PROFILE_PRESETS.map((preset) => `<button type="button" class="preset-button" data-preset-agent="${escapeHtml(agent.id)}" data-preset-key="${escapeHtml(preset.key)}">${escapeHtml(preset.label)}</button>`).join("")}
         </div>
         <div class="profile-actions">
-          <button type="button" class="secondary-button" data-save-profile="${escapeHtml(agent.id)}">保存标签</button>
-          <button type="button" class="secondary-button" data-clear-profile="${escapeHtml(agent.id)}">清空</button>
+          <button type="button" class="profile-action-button primary" data-save-profile="${escapeHtml(agent.id)}">保存标签</button>
+          <button type="button" class="profile-action-button secondary" data-clear-profile="${escapeHtml(agent.id)}">清空</button>
         </div>
       </div>
     </article>
@@ -864,24 +931,31 @@ function renderAgents() {
 
   bindAgentToggles();
 
-  els.agentsList.querySelectorAll("[data-add-agent]").forEach((button) => {
+  els.agentsList.querySelectorAll("[data-agent-membership]").forEach((button) => {
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
-      const agent = state.agents.find((item) => item.id === button.dataset.addAgent);
+      const agentId = button.dataset.agentMembership;
+      const agent = state.agents.find((item) => item.id === agentId);
       if (!agent || !state.activeRoomId || button.disabled) {
         return;
       }
       button.disabled = true;
       try {
-        await api(`/api/rooms/${state.activeRoomId}/members`, {
-          method: "POST",
-          body: {
-            agentId: agent.id,
-            name: agent.name,
-            roles: agent.roles || [],
-            capabilities: agent.capabilities || []
-          }
-        });
+        if (button.dataset.isMember === "true") {
+          await api(`/api/rooms/${state.activeRoomId}/members/${encodeURIComponent(agent.id)}`, {
+            method: "DELETE"
+          });
+        } else {
+          await api(`/api/rooms/${state.activeRoomId}/members`, {
+            method: "POST",
+            body: {
+              agentId: agent.id,
+              name: agent.name,
+              roles: agent.roles || [],
+              capabilities: agent.capabilities || []
+            }
+          });
+        }
         await loadActiveRoom();
       } catch (error) {
         setConnection(error.message);
@@ -975,16 +1049,29 @@ function renderActiveRoom() {
 
 function renderActiveTaskStatus(task) {
   const points = Array.isArray(task.confirmationPoints) ? task.confirmationPoints.filter(Boolean) : [];
+  const runningStage = task.stages?.find((stage) => stage.status === "running") || null;
+  const startedAt = taskStartedAt(task);
+  const endedAt = terminalAt(task);
+  const taskDuration = renderDurationBadge({
+    label: task.deliveredAt ? "交付耗时" : "总耗时",
+    startedAt,
+    endedAt,
+    live: Boolean(startedAt && !endedAt && isActiveTimedStatus(task.status)),
+    className: "active-task-duration"
+  });
   const pendingHint = task.status === "pending"
-    ? `<span class="pending-hint">${escapeHtml(points[0] || "请在中间聊天窗补充确认点，系统会继续交给总控分析。")}</span>`
+    ? `<span class="pending-hint">${escapeHtml(displayConfirmationPointBrief(points[0]) || "请在中间聊天窗补充确认点，系统会继续交给总控分析。")}</span>`
     : "";
   const retryHint = task.status === "retrying"
-    ? `<span class="retry-hint">OpenClaw 连接异常，正在自动重连继续。</span>`
+    ? `<span class="retry-hint">${escapeHtml(task.retryReason || "等待自动继续。")}</span>`
     : "";
   const approvalHint = task.status === "approval_pending"
     ? `<span class="retry-hint">OpenCode 正在等待你确认工具执行或回答问题。</span>`
     : "";
-  return `<strong>${escapeHtml(statusLabel(task.status))}</strong><span class="active-task-goal">${escapeHtml(task.goal)}</span>${pendingHint}${retryHint}${approvalHint}`;
+  const runningHint = runningStage
+    ? `<span class="retry-hint">${escapeHtml(runningStage.progress?.label || `${runningStage.assignedAgentId || "Agent"} 正在执行 ${displayStageTitle(runningStage.title)}`)} · <span data-live-duration="${escapeHtml(runningStage.startedAt || "")}">${escapeHtml(formatElapsedFrom(runningStage.startedAt))}</span></span>`
+    : "";
+  return `<strong>${escapeHtml(statusLabel(task.status))}</strong>${taskDuration}<span class="active-task-goal">${escapeHtml(task.goal)}</span>${runningHint}${pendingHint}${retryHint}${approvalHint}`;
 }
 
 function renderEvents() {
@@ -1008,29 +1095,113 @@ function renderEvents() {
 function startRetryCountdowns() {
   updateRetryCountdowns();
   const hasCountdown = Boolean(els.eventsFeed.querySelector("[data-retry-at]"));
-  if (hasCountdown && !retryCountdownTimer) {
+  const hasLiveDuration = Boolean(document.querySelector("[data-live-duration]"));
+  if ((hasCountdown || hasLiveDuration) && !retryCountdownTimer) {
     retryCountdownTimer = window.setInterval(updateRetryCountdowns, 1000);
   }
-  if (!hasCountdown && retryCountdownTimer) {
+  if (!hasCountdown && !hasLiveDuration && retryCountdownTimer) {
     window.clearInterval(retryCountdownTimer);
     retryCountdownTimer = null;
   }
 }
 
 function updateRetryCountdowns() {
-  if (!els.eventsFeed) {
-    return;
+  if (els.eventsFeed) {
+    els.eventsFeed.querySelectorAll("[data-retry-at]").forEach((item) => {
+      const retryAt = new Date(item.dataset.retryAt).getTime();
+      const label = item.dataset.retryLabel || "自动重连";
+      if (!Number.isFinite(retryAt)) {
+        item.textContent = `准备${label}`;
+        return;
+      }
+      item.textContent = retryCountdownText(item.dataset.retryAt, label);
+    });
   }
-  els.eventsFeed.querySelectorAll("[data-retry-at]").forEach((item) => {
-    const retryAt = new Date(item.dataset.retryAt).getTime();
-    const label = item.dataset.retryLabel || "自动重连";
-    if (!Number.isFinite(retryAt)) {
-      item.textContent = `准备${label}`;
-      return;
-    }
-    const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
-    item.textContent = seconds > 0 ? `${seconds}s 后${label}` : `正在${label}`;
+  document.querySelectorAll("[data-live-duration]").forEach((item) => {
+    item.textContent = formatElapsedFrom(item.dataset.liveDuration);
   });
+}
+
+function retryCountdownText(retryAtValue, label) {
+  const retryAt = new Date(retryAtValue).getTime();
+  if (!Number.isFinite(retryAt)) {
+    return `准备${label}`;
+  }
+  const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+  if (seconds <= 0) {
+    return `正在${label}`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  const duration = minutes > 0
+    ? `${minutes}m${remainingSeconds ? `${remainingSeconds}s` : ""}`
+    : `${seconds}s`;
+  return `${duration} 后${label}`;
+}
+
+function formatElapsedFrom(value) {
+  return formatDurationBetween(value) || "刚刚";
+}
+
+function formatDurationBetween(startValue, endValue) {
+  const startedAt = new Date(startValue || "").getTime();
+  if (!Number.isFinite(startedAt)) {
+    return "";
+  }
+  const endedAt = endValue ? new Date(endValue).getTime() : Date.now();
+  const safeEndedAt = Number.isFinite(endedAt) ? endedAt : Date.now();
+  const seconds = Math.max(0, Math.floor((safeEndedAt - startedAt) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  if (hours > 0) {
+    return `${hours}h${minutes ? `${minutes}m` : ""}${remainingSeconds && !minutes ? `${remainingSeconds}s` : ""}`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m${remainingSeconds ? `${remainingSeconds}s` : ""}`;
+  }
+  return `${remainingSeconds}s`;
+}
+
+function terminalAt(record) {
+  return record?.deliveredAt || record?.completedAt || record?.failedAt || record?.cancelledAt || "";
+}
+
+function streamSegmentTitle(stage, segmentIndex, segment = {}) {
+  const elapsed = formatDurationBetween(stage?.startedAt, terminalAt(stage));
+  if (terminalAt(stage) && elapsed) {
+    return `已处理 ${elapsed}`;
+  }
+  const total = Number(segment.segmentCount || 0);
+  return total > segmentIndex + 1
+    ? `已处理片段 ${segmentIndex + 1}/${total}`
+    : `已处理片段 ${segmentIndex + 1}`;
+}
+
+function taskStartedAt(task) {
+  if (task?.startedAt) {
+    return task.startedAt;
+  }
+  if (task?.createdAt && task?.status && task.status !== "queued") {
+    return task.createdAt;
+  }
+  return "";
+}
+
+function isActiveTimedStatus(status) {
+  return ["queued", "running", "pending", "approval_pending", "retrying"].includes(String(status || ""));
+}
+
+function renderDurationBadge({ label, startedAt, endedAt, live, className = "duration-badge" }) {
+  if (!startedAt) {
+    return "";
+  }
+  const value = formatDurationBetween(startedAt, endedAt);
+  if (!value) {
+    return "";
+  }
+  const liveAttr = live ? ` data-live-duration="${escapeHtml(startedAt)}"` : "";
+  return `<span class="${escapeHtml(className)}">${escapeHtml(label)} <strong${liveAttr}>${escapeHtml(value)}</strong></span>`;
 }
 
 function renderTasks() {
@@ -1044,13 +1215,22 @@ function renderTasks() {
   updateInspectorTaskLayout(hasOpenTask, state.tasks.length > 4);
   els.tasksList.innerHTML = state.tasks.map((task) => {
     const open = state.expandedTasks.has(task.id) || task.id === current?.id;
+    const startedAt = taskStartedAt(task);
+    const endedAt = terminalAt(task);
+    const taskDuration = renderDurationBadge({
+      label: task.deliveredAt ? "交付耗时" : "总耗时",
+      startedAt,
+      endedAt,
+      live: Boolean(startedAt && !endedAt && isActiveTimedStatus(task.status)),
+      className: "task-duration"
+    });
     return `
     <details class="task-card" data-task-card="${escapeHtml(task.id)}" ${open ? "open" : ""}>
       <summary class="task-summary">
         <span class="summary-caret">›</span>
         <span class="task-summary-main">
           <span class="task-title">${escapeHtml(task.goal)}</span>
-          <span class="meta">${escapeHtml(task.createdAt ? formatDateTime(task.createdAt) : "")}</span>
+          <span class="meta task-meta">${escapeHtml(task.createdAt ? formatDateTime(task.createdAt) : "")}${taskDuration}</span>
         </span>
         <span class="status-pill ${escapeHtml(task.status)}">${escapeHtml(statusLabel(task.status))}</span>
       </summary>
@@ -1065,6 +1245,7 @@ function renderTasks() {
   `;
   }).join("");
   bindTaskToggles();
+  startRetryCountdowns();
 }
 
 function updateInspectorTaskLayout(hasOpenTask, hasManyTasks) {
@@ -1079,6 +1260,15 @@ function updateInspectorTaskLayout(hasOpenTask, hasManyTasks) {
 function renderTaskStage(stage) {
   const detailOpen = ["running", "failed"].includes(stage.status);
   const title = displayStageTitle(stage.title);
+  const progress = stage.progress || {};
+  const agent = findAgentDisplay(stage.assignedAgentId);
+  const stageDuration = renderDurationBadge({
+    label: "阶段耗时",
+    startedAt: stage.startedAt,
+    endedAt: terminalAt(stage),
+    live: Boolean(stage.startedAt && !terminalAt(stage)),
+    className: "stage-duration"
+  });
   return `
     <details class="stage" ${detailOpen ? "open" : ""}>
       <summary class="stage-summary">
@@ -1086,9 +1276,11 @@ function renderTaskStage(stage) {
           <span class="stage-name">${escapeHtml(title)}</span>
           <span class="status-pill ${escapeHtml(stage.status)}">${escapeHtml(statusLabel(stage.status))}</span>
         </div>
-        <div class="meta">${escapeHtml(stage.assignedAgentId || "unassigned")} · ${(stage.needs || []).map(escapeHtml).join(", ")}</div>
+        <div class="meta stage-meta"><span class="stage-agent-name">${escapeHtml(agent.name || "未分配 Agent")}</span>${stageDuration}</div>
       </summary>
       <div class="stage-detail-body">
+        ${progress.label ? `<div class="stage-progress">${escapeHtml(progress.label)}</div>` : ""}
+        ${progress.detail ? `<div class="stage-progress-detail">${escapeHtml(progress.detail)}</div>` : ""}
         ${stage.reason ? `<div class="stage-note">${escapeHtml(stage.reason)}</div>` : ""}
         ${stage.result?.summary ? `<div class="stage-result">${escapeHtml(truncate(stage.result.summary, 180))}</div>` : ""}
       </div>
@@ -1173,8 +1365,6 @@ function renderTeamRoomConfigForm() {
     els.supervisorDispatchTemplateInput,
     els.specialistWorkTemplateInput,
     els.supervisorReviewTemplateInput,
-    els.dispatchJsonContractTemplateInput,
-    els.reviewJsonContractTemplateInput,
     els.previousOutputItemTemplateInput,
     els.roomContextItemTemplateInput,
     els.taskMessageItemTemplateInput,
@@ -1190,8 +1380,6 @@ function fillPromptTemplateInputs(templates) {
   els.supervisorDispatchTemplateInput.value = templates.supervisorDispatch || "";
   els.specialistWorkTemplateInput.value = templates.specialistWork || "";
   els.supervisorReviewTemplateInput.value = templates.supervisorReview || "";
-  els.dispatchJsonContractTemplateInput.value = templates.dispatchJsonContract || "";
-  els.reviewJsonContractTemplateInput.value = templates.reviewJsonContract || "";
   els.previousOutputItemTemplateInput.value = templates.previousOutputItem || "";
   els.roomContextItemTemplateInput.value = templates.roomContextItem || "";
   els.taskMessageItemTemplateInput.value = templates.taskMessageItem || "";
@@ -1335,8 +1523,6 @@ function readTeamRoomConfigForm(existingPolicy = {}) {
       supervisorDispatch: els.supervisorDispatchTemplateInput.value,
       specialistWork: els.specialistWorkTemplateInput.value,
       supervisorReview: els.supervisorReviewTemplateInput.value,
-      dispatchJsonContract: els.dispatchJsonContractTemplateInput.value,
-      reviewJsonContract: els.reviewJsonContractTemplateInput.value,
       previousOutputItem: els.previousOutputItemTemplateInput.value,
       roomContextItem: els.roomContextItemTemplateInput.value,
       taskMessageItem: els.taskMessageItemTemplateInput.value
@@ -1620,6 +1806,11 @@ function runningStageForActiveTask() {
 function labelForEvent(event) {
   return ({
     "room.created": "协作室已创建",
+    "runtime.reconnect_started": "手动重连",
+    "runtime.reconnect_completed": "重连完成",
+    "runtime.reconnect_failed": "重连失败",
+    "runtime.approval_requested": "等待运行时确认",
+    "runtime.approval_resolved": "运行时确认已处理",
     "member.added": "Agent 已加入",
     "member.removed": "Agent 已移除",
     "task.created": "任务已创建",
@@ -1628,12 +1819,18 @@ function labelForEvent(event) {
     "task.pending": "等待人工确认",
     "task.retry_scheduled": "自动重连",
     "task.wait_scheduled": "内部等待",
+    "task.delivered": "已先行交付",
+    "task.audit_completed": "后台审计完成",
     "task.completed": "任务已完成",
     "task.failed": "任务失败",
-    "runtime.approval_requested": "OpenCode 等待确认",
-    "runtime.approval_resolved": "OpenCode 确认已处理",
     "stage.assigned": "阶段已分配",
     "stage.running": "阶段运行中",
+    "stage.progress": "阶段进度",
+    "stage.stream": "实时输出",
+    "stage.awaiting_agent": "等待 Agent",
+    "stage.result_received": "已收到结果",
+    "stage.review_decision": "总控判定",
+    "stage.auto_continue": "自动继续",
     "stage.completed": "阶段已完成",
     "stage.failed": "阶段失败"
   })[event.type] || event.type.replaceAll(".", " ");
@@ -1648,8 +1845,37 @@ function bodyForEvent(event, payload) {
   if (event.type === "stage.completed") {
     return `${payload.agentId}: ${payload.result?.summary || "已完成"}`;
   }
+  if (event.type === "runtime.reconnect_started") {
+    return "用户手动触发执行后端重连，TeamRoom 正在刷新连接。";
+  }
+  if (event.type === "runtime.reconnect_completed") {
+    const elapsedMs = payload.result?.elapsedMs;
+    const elapsed = Number.isFinite(elapsedMs) ? `，耗时 ${Math.max(1, Math.round(elapsedMs / 1000))} 秒` : "";
+    return `执行后端连接已恢复${elapsed}。`;
+  }
+  if (event.type === "runtime.reconnect_failed") {
+    return `执行后端手动重连失败：${payload.error || "未知错误"}`;
+  }
+  if (event.type === "runtime.approval_requested") {
+    return payload.approval?.title || "OpenCode 正在等待人工确认。";
+  }
+  if (event.type === "runtime.approval_resolved") {
+    return `OpenCode 确认已处理：${approvalStatusLabel(payload.approval?.status)}`;
+  }
   if (event.type === "stage.running") {
     return `${payload.agentId} 正在执行 ${displayStageTitle(payload.title)}`;
+  }
+  if (event.type === "stage.stream") {
+    return `${displayStageTitle(payload.title || "阶段")}：${payload.label || "执行后端正在流式输出"}\n${payload.detail || ""}`;
+  }
+  if (event.type === "stage.progress" || event.type === "stage.awaiting_agent" || event.type === "stage.result_received") {
+    return `${displayStageTitle(payload.title || "阶段")}：${payload.label || payload.detail || "进度更新"}`;
+  }
+  if (event.type === "stage.review_decision") {
+    return `总控判定：${payload.decision || "已完成判定"}${payload.reason ? `。${payload.reason}` : ""}`;
+  }
+  if (event.type === "stage.auto_continue") {
+    return `${payload.agentId} 等待内部确认，TeamRoom 已自动补发继续执行指令。`;
   }
   if (event.type === "stage.assigned") {
     return `${displayStageTitle(payload.stage?.title || "阶段")} 分配给 ${payload.agentId}`;
@@ -1666,27 +1892,23 @@ function bodyForEvent(event, payload) {
   if (event.type === "task.completed") {
     return payload.summary || "任务已完成";
   }
+  if (event.type === "task.delivered") {
+    return payload.summary || "已先行交付结论，后台审计继续执行。";
+  }
+  if (event.type === "task.audit_completed") {
+    return payload.summary || "后台审计完成。";
+  }
   if (event.type === "task.pending") {
     const points = payload.confirmationPoints || [];
     return points.length
-      ? `任务等待人工确认：${points.join("；")}`
+      ? `任务等待人工确认：${points.map(displayConfirmationPointBrief).filter(Boolean).join("；")}`
       : (payload.reason || "任务等待人工确认");
   }
   if (event.type === "task.retry_scheduled") {
-    return `OpenClaw 连接异常：${payload.error || "连接中断"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动继续。`;
+    return `执行后端连接异常：${payload.error || "连接中断"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动继续。`;
   }
   if (event.type === "task.wait_scheduled") {
     return `内部 Agent 尚未返回：${payload.reason || "等待执行结果"}。${Math.round((payload.delayMs || 5000) / 1000)} 秒后自动复核。`;
-  }
-  if (event.type === "runtime.approval_requested") {
-    const approval = payload.approval || {};
-    return approval.type === "question"
-      ? `${payload.agentId || approval.agentId || "OpenCode"} 请求人工回答`
-      : `${payload.agentId || approval.agentId || "OpenCode"} 请求执行确认：${approval.permission || approval.title || ""}`.trim();
-  }
-  if (event.type === "runtime.approval_resolved") {
-    const approval = payload.approval || {};
-    return `OpenCode 确认已处理：${approval.status || "resolved"}`;
   }
   if (event.type === "task.failed") {
     return payload.error || "任务失败";
@@ -1718,6 +1940,54 @@ function eventToMessage(event) {
       title: "提交需求",
       time: event.timestamp,
       body: payload.goal || ""
+    };
+  }
+
+  if (event.type === "runtime.reconnect_started") {
+    return {
+      kind: "system process",
+      time: event.timestamp,
+      body: "用户手动触发执行后端重连，TeamRoom 正在刷新连接。"
+    };
+  }
+
+  if (event.type === "runtime.reconnect_completed") {
+    const elapsedMs = payload.result?.elapsedMs;
+    const elapsed = Number.isFinite(elapsedMs) ? `，耗时 ${Math.max(1, Math.round(elapsedMs / 1000))} 秒` : "";
+    return {
+      kind: "system process",
+      time: event.timestamp,
+      body: `执行后端连接已恢复${elapsed}。`
+    };
+  }
+
+  if (event.type === "runtime.reconnect_failed") {
+    return {
+      kind: "system error",
+      time: event.timestamp,
+      body: `执行后端手动重连失败：${payload.error || "未知错误"}`
+    };
+  }
+
+  if (event.type === "runtime.approval_requested") {
+    return {
+      id: event.id,
+      kind: "system runtime-approval",
+      taskId: event.taskId || payload.taskId,
+      time: event.timestamp,
+      approval: payload.approval,
+      actionable: activeTask()?.id === (event.taskId || payload.taskId)
+    };
+  }
+
+  if (event.type === "runtime.approval_resolved") {
+    return {
+      id: event.id,
+      kind: "system runtime-approval",
+      taskId: event.taskId || payload.taskId,
+      time: event.timestamp,
+      approval: payload.approval,
+      actionable: false
     };
   }
 
@@ -1753,6 +2023,55 @@ function eventToMessage(event) {
     };
   }
 
+  if (event.type === "stage.stream") {
+    const stage = findTaskStage(event.taskId, event.stageId);
+    const agent = findAgentDisplay(payload.agentId || stage?.assignedAgentId);
+    const segment = payload.streamSegment || {};
+    const segmentIndex = Number(segment.segmentIndex || 0);
+    const streamId = `stream-${event.taskId || payload.taskId || "task"}-${event.stageId || payload.stageId || "stage"}-${segmentIndex}`;
+    const completed = Boolean(terminalAt(stage)) || Boolean(segment.isSegmentComplete);
+    const title = completed
+      ? streamSegmentTitle(stage, segmentIndex, segment)
+      : "处理过程 · 进行中";
+    return {
+      id: streamId,
+      kind: `agent stream ${completed ? "completed" : "live"}`,
+      author: agent.name,
+      agentId: payload.agentId || stage?.assignedAgentId,
+      title,
+      time: event.timestamp,
+      body: payload.detail || "正在等待执行后端输出..."
+    };
+  }
+
+  if (["stage.progress", "stage.awaiting_agent", "stage.result_received"].includes(event.type)) {
+    return {
+      kind: event.type === "stage.awaiting_agent" ? "system process live" : "system process",
+      time: event.timestamp,
+      retryAt: null,
+      body: `${displayStageTitle(payload.title || "阶段")}：${payload.label || payload.detail || "进度更新"}`
+    };
+  }
+
+  if (event.type === "stage.review_decision") {
+    const extra = payload.followUpSubtasks?.length
+      ? `；追加 ${payload.followUpSubtasks.map((item) => item.agent_id || item.agentId || item.agent).filter(Boolean).join("、")}`
+      : "";
+    return {
+      kind: "system process",
+      time: event.timestamp,
+      body: `总控判定：${payload.decision || "已完成判定"}${extra}${payload.reason ? `。${payload.reason}` : ""}`
+    };
+  }
+
+  if (event.type === "stage.auto_continue") {
+    return {
+      kind: "system process",
+      time: event.timestamp,
+      body: `${payload.agentId} 等待内部确认，TeamRoom 已自动补发继续执行指令。`
+    };
+  }
+
   if (event.type === "stage.assigned") {
     return {
       kind: "system",
@@ -1779,49 +2098,55 @@ function eventToMessage(event) {
 
   if (event.type === "task.completed") {
     return {
-      kind: "system",
+      kind: "agent",
+      id: event.id,
+      author: "总控",
+      title: "任务完成",
       time: event.timestamp,
-      body: "任务已完成"
+      body: payload.summary || "任务已完成"
+    };
+  }
+
+  if (event.type === "task.delivered") {
+    return {
+      kind: "agent",
+      id: event.id,
+      author: "总控",
+      title: "已先行交付",
+      time: event.timestamp,
+      body: renderDeliveryBody(payload)
+    };
+  }
+
+  if (event.type === "task.audit_completed") {
+    return {
+      kind: "agent",
+      id: event.id,
+      author: "总控",
+      title: "后台审计完成",
+      time: event.timestamp,
+      body: renderAuditCompletedBody(payload)
     };
   }
 
   if (event.type === "task.pending") {
     const points = payload.confirmationPoints || [];
+    const taskId = event.taskId || payload.taskId || "";
+    const matchingTask = state.tasks.find((task) => task.id === taskId);
+    const current = activeTask();
     return {
       kind: "system pending",
       id: event.id,
-      taskId: event.taskId || payload.taskId || "",
-      actionable: activeTask()?.id === (event.taskId || payload.taskId) && activeTask()?.status === "pending",
+      taskId,
+      actionable: matchingTask
+        ? !["completed", "cancelled", "failed"].includes(matchingTask.status)
+        : current?.id === taskId,
       time: event.timestamp,
       points,
       reason: payload.reason || "",
       body: points.length
-        ? `任务等待人工确认：${points.join("；")}`
+        ? `任务等待人工确认：${points.map(displayConfirmationPointBrief).filter(Boolean).join("；")}`
         : (payload.reason || "任务等待人工确认")
-    };
-  }
-
-  if (event.type === "runtime.approval_requested") {
-    const approval = payload.approval || {};
-    return {
-      kind: "system runtime-approval",
-      id: event.id,
-      taskId: event.taskId || payload.taskId || "",
-      actionable: activeTask()?.id === (event.taskId || payload.taskId) && approval.status === "pending",
-      time: event.timestamp,
-      approval
-    };
-  }
-
-  if (event.type === "runtime.approval_resolved") {
-    const approval = payload.approval || {};
-    return {
-      kind: "system runtime-approval",
-      id: event.id,
-      taskId: event.taskId || payload.taskId || "",
-      actionable: false,
-      time: event.timestamp,
-      approval
     };
   }
 
@@ -1831,7 +2156,7 @@ function eventToMessage(event) {
       time: event.timestamp,
       retryAt: payload.retryAt,
       retryLabel: "自动重连",
-      body: `OpenClaw 连接异常，已安排自动重连继续。${payload.error ? `原因：${payload.error}` : ""}`.trim()
+      body: `执行后端连接异常，已安排自动重连继续。${payload.error ? `原因：${payload.error}` : ""}`.trim()
     };
   }
 
@@ -1890,6 +2215,48 @@ function eventToMessage(event) {
   return null;
 }
 
+function renderDeliveryBody(payload = {}) {
+  const lines = [];
+  if (payload.summary) {
+    lines.push(payload.summary);
+  }
+  const artifacts = Array.isArray(payload.changedArtifacts) ? payload.changedArtifacts : [];
+  if (artifacts.length) {
+    lines.push("", "交付件:", ...artifacts.map((item) => `- ${formatDeliveryItem(item)}`));
+  }
+  const risks = Array.isArray(payload.risks) ? payload.risks : [];
+  if (risks.length) {
+    lines.push("", "风险:", ...risks.map((item) => `- ${formatDeliveryItem(item)}`));
+  }
+  const nextSteps = Array.isArray(payload.nextSteps) ? payload.nextSteps : [];
+  if (nextSteps.length) {
+    lines.push("", "下一步:", ...nextSteps.map((item) => `- ${formatDeliveryItem(item)}`));
+  }
+  if (payload.backgroundAuditRequired) {
+    lines.push("", "后台闭环审计继续执行；若发现问题，TeamRoom 会再次弹出。");
+  }
+  return lines.filter((line, index) => line || lines[index - 1]).join("\n") || "已先行交付结论。";
+}
+
+function renderAuditCompletedBody(payload = {}) {
+  const lines = [payload.summary || "后台审计完成，未发现需要用户处理的问题。"];
+  const risks = Array.isArray(payload.risks) ? payload.risks.filter(Boolean) : [];
+  if (risks.length) {
+    lines.push("", "审计关注点:", ...risks.map((item) => `- ${formatDeliveryItem(item)}`));
+  }
+  return lines.join("\n");
+}
+
+function formatDeliveryItem(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    return value.name || value.title || value.path || JSON.stringify(value);
+  }
+  return String(value ?? "");
+}
+
 function renderMessage(message) {
   if (message.kind === "system pending") {
     return renderPendingDecisionPanel(message);
@@ -1900,10 +2267,10 @@ function renderMessage(message) {
 
   if (message.kind.startsWith("system")) {
     const retryCountdown = message.retryAt
-      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}" data-retry-label="${escapeHtml(message.retryLabel || "自动重连")}">5s 后${escapeHtml(message.retryLabel || "自动重连")}</strong>`
+      ? `<strong class="retry-countdown" data-retry-at="${escapeHtml(message.retryAt)}" data-retry-label="${escapeHtml(message.retryLabel || "自动重连")}">${retryCountdownText(message.retryAt, message.retryLabel || "自动重连")}</strong>`
       : "";
     return `
-      <div class="message-system ${message.kind.includes("error") ? "error" : ""} ${message.kind.includes("pending") ? "pending" : ""} ${message.kind.includes("retry") ? "retry" : ""}">
+      <div class="message-system ${message.kind.includes("error") ? "error" : ""} ${message.kind.includes("pending") ? "pending" : ""} ${message.kind.includes("retry") ? "retry" : ""} ${message.kind.includes("process") ? "process" : ""} ${message.kind.includes("live") ? "live" : ""}">
         <span>${renderMarkdownInline(message.body)}</span>
         ${retryCountdown}
         <time>${formatTime(message.time)}</time>
@@ -1914,8 +2281,14 @@ function renderMessage(message) {
   const avatar = initials(message.author);
   const displayTitle = displayStageTitle(message.title);
   const title = displayTitle ? `<div class="message-stage">${escapeHtml(displayTitle)}</div>` : "";
-  const collapsible = isLongMessage(message.body);
+  const isStream = message.kind.includes("stream");
+  const collapsible = isStream || isLongMessage(message.body);
+  const defaultCollapsed = isStream && message.kind.includes("completed");
   const expanded = message.id && state.expandedMessages.has(message.id);
+  const collapsed = collapsible && (defaultCollapsed ? !expanded : !expanded && !isStream);
+  const toggleLabel = collapsed
+    ? (isStream ? "查看过程" : "展开")
+    : (isStream ? "收起过程" : "收起");
   return `
     <article class="message-row ${escapeHtml(message.kind)}">
       <div class="avatar" title="${escapeHtml(message.author)}">${escapeHtml(avatar)}</div>
@@ -1924,10 +2297,10 @@ function renderMessage(message) {
           <span>${escapeHtml(message.author)}</span>
           <time>${formatTime(message.time)}</time>
         </div>
-        <div class="message-bubble ${collapsible ? "collapsible" : ""} ${collapsible && !expanded ? "collapsed" : ""}" ${collapsible ? `data-collapsible-message="${escapeHtml(message.id || "")}"` : ""}>
+        <div class="message-bubble ${collapsible ? "collapsible" : ""} ${isStream ? "stream-bubble" : ""} ${collapsed ? "collapsed" : ""}" ${collapsible ? `data-collapsible-message="${escapeHtml(message.id || "")}"` : ""}>
           ${title}
           <div class="message-markdown">${renderMarkdown(message.body)}</div>
-          ${collapsible ? `<button type="button" class="message-toggle" data-message-toggle="${escapeHtml(message.id || "")}">${expanded ? "收起" : "展开"}</button>` : ""}
+          ${collapsible ? `<button type="button" class="message-toggle" data-message-toggle="${escapeHtml(message.id || "")}">${escapeHtml(toggleLabel)}</button>` : ""}
         </div>
       </div>
     </article>
@@ -2005,7 +2378,7 @@ function renderDecisionItem(point, index, actionable = true) {
       </details>`
     : customInput;
   return `
-    <article class="decision-item" data-decision-index="${index}" data-decision-question="${escapeHtml(point.question)}">
+    <article class="decision-item" data-decision-index="${index}" data-decision-id="${escapeHtml(point.id || "")}" data-decision-question="${escapeHtml(point.question)}">
       <div class="decision-number">${index + 1}</div>
       <div class="decision-content">
         <div class="decision-question">${escapeHtml(point.question)}</div>
@@ -2023,70 +2396,28 @@ function renderRuntimeApprovalPanel(message) {
   const title = approval.title || (approval.type === "question" ? "OpenCode 请求人工回答" : "OpenCode 请求执行确认");
   const statusText = actionable ? "等待处理" : approvalStatusLabel(approval.status);
   if (approval.type === "question") {
-    return renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable });
+    const questions = approval.questions?.length
+      ? approval.questions
+      : [{ header: "问题", question: approval.details || title, options: [], custom: true }];
+    return `
+      <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="question">
+        <div class="decision-panel-header"><div><span class="decision-kicker runtime-kicker">OpenCode 问题</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(statusText)}</small></div><time>${formatTime(message.time)}</time></div>
+        <div class="decision-list runtime-question-list">
+          ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable)).join("")}
+        </div>
+        ${actionable ? `<textarea class="runtime-approval-message" rows="2" placeholder="可选：补充说明"></textarea><div class="decision-actions"><button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button><button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">提交回答并继续</button></div>` : ""}
+      </section>`;
   }
-  return renderRuntimePermissionPanel({ message, approval, title, statusText, actionable });
-}
-
-function renderRuntimePermissionPanel({ message, approval, title, statusText, actionable }) {
   const patterns = Array.isArray(approval.patterns) ? approval.patterns.filter(Boolean) : [];
   return `
     <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="permission">
-      <div class="decision-panel-header">
-        <div>
-          <span class="decision-kicker runtime-kicker">OpenCode 确认</span>
-          <strong>${escapeHtml(title)}</strong>
-          <small>${escapeHtml(statusText)}</small>
-        </div>
-        <time>${formatTime(message.time)}</time>
-      </div>
+      <div class="decision-panel-header"><div><span class="decision-kicker runtime-kicker">OpenCode 确认</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(statusText)}</small></div><time>${formatTime(message.time)}</time></div>
       <div class="runtime-permission-body">
-        <div class="runtime-permission-meta">
-          <span>Agent</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong>
-          <span>权限</span><strong>${escapeHtml(approval.permission || "tool")}</strong>
-        </div>
-        ${patterns.length
-          ? `<pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre>`
-          : `<p>${escapeHtml(approval.details || "OpenCode 请求执行一个受权限控制的动作。")}</p>`}
-        ${actionable ? `
-          <textarea class="runtime-approval-message" rows="2" placeholder="可选：给 OpenCode 的说明"></textarea>
-          <div class="decision-actions">
-            <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
-            ${approval.canAlwaysAllow ? `<button type="button" class="secondary runtime-approval-reply" data-runtime-reply="always">始终允许</button>` : ""}
-            <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">本次允许</button>
-          </div>
-        ` : ""}
+        <div class="runtime-permission-meta"><span>Agent</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong><span>权限</span><strong>${escapeHtml(approval.permission || "tool")}</strong></div>
+        ${patterns.length ? `<pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre>` : `<p>${escapeHtml(approval.details || "OpenCode 请求执行一个受权限控制的动作。")}</p>`}
+        ${actionable ? `<textarea class="runtime-approval-message" rows="2" placeholder="可选：给 OpenCode 的说明"></textarea><div class="decision-actions"><button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>${approval.canAlwaysAllow ? `<button type="button" class="secondary runtime-approval-reply" data-runtime-reply="always">始终允许</button>` : ""}<button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">本次允许</button></div>` : ""}
       </div>
-    </section>
-  `;
-}
-
-function renderRuntimeQuestionPanel({ message, approval, title, statusText, actionable }) {
-  const questions = (approval.questions || []).length
-    ? approval.questions
-    : [{ header: "问题", question: approval.details || title, options: [], custom: true }];
-  return `
-    <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="question">
-      <div class="decision-panel-header">
-        <div>
-          <span class="decision-kicker runtime-kicker">OpenCode 问题</span>
-          <strong>${escapeHtml(title)}</strong>
-          <small>${escapeHtml(statusText)}</small>
-        </div>
-        <time>${formatTime(message.time)}</time>
-      </div>
-      <div class="decision-list runtime-question-list">
-        ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable)).join("")}
-      </div>
-      ${actionable ? `
-        <textarea class="runtime-approval-message" rows="2" placeholder="可选：补充说明"></textarea>
-        <div class="decision-actions">
-          <button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>
-          <button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">提交回答并继续</button>
-        </div>
-      ` : ""}
-    </section>
-  `;
+    </section>`;
 }
 
 function renderRuntimeQuestionItem(question, index, actionable) {
@@ -2097,29 +2428,14 @@ function renderRuntimeQuestionItem(question, index, actionable) {
       <div class="decision-content">
         <div class="decision-question">${escapeHtml(question.header || `问题 ${index + 1}`)}</div>
         ${question.question ? `<div class="decision-hint">${escapeHtml(question.question)}</div>` : ""}
-        ${options.length ? `
-          <div class="decision-options">
-            ${options.map((option) => `
-              <button type="button" class="decision-option" data-runtime-question-option="${index}" data-option-value="${escapeHtml(option.label)}" ${actionable ? "" : "disabled"}>
-                <span>${escapeHtml(option.label)}</span>
-                <strong>${escapeHtml(option.description || option.label)}</strong>
-              </button>
-            `).join("")}
-          </div>
-        ` : ""}
+        ${options.length ? `<div class="decision-options">${options.map((option) => `<button type="button" class="decision-option" data-runtime-question-option="${index}" data-option-value="${escapeHtml(option.label)}" ${actionable ? "" : "disabled"}><span>${escapeHtml(option.label)}</span><strong>${escapeHtml(option.description || option.label)}</strong></button>`).join("")}</div>` : ""}
         ${question.custom !== false ? `<input class="decision-custom-input" data-runtime-question-custom="${index}" placeholder="${options.length ? "输入其他答案" : "请输入回答"}" ${actionable ? "" : "disabled"} />` : ""}
       </div>
-    </article>
-  `;
+    </article>`;
 }
 
 function approvalStatusLabel(status) {
-  return ({
-    pending: "等待处理",
-    approved: "已允许",
-    rejected: "已拒绝",
-    cancelled: "已取消"
-  })[status] || status || "已处理";
+  return ({ pending: "等待处理", approved: "已允许", rejected: "已拒绝", cancelled: "已取消" })[status] || status || "已处理";
 }
 
 function bindPendingDecisionPanels() {
@@ -2174,30 +2490,21 @@ function bindRuntimeApprovalPanels() {
     panel.querySelectorAll("[data-runtime-question-option]").forEach((button) => {
       button.addEventListener("click", () => {
         const index = button.dataset.runtimeQuestionOption;
-        const question = button.closest("[data-runtime-question-index]");
-        const allowMultiple = question?.dataset.runtimeMultiple === "true";
-        if (!allowMultiple) {
-          panel.querySelectorAll(`[data-runtime-question-option="${index}"]`).forEach((item) => {
-            item.classList.toggle("selected", item === button);
-          });
+        const multiple = button.closest("[data-runtime-question-index]")?.dataset.runtimeMultiple === "true";
+        if (!multiple) {
+          panel.querySelectorAll(`[data-runtime-question-option="${index}"]`).forEach((item) => item.classList.toggle("selected", item === button));
         } else {
           button.classList.toggle("selected");
         }
         const input = panel.querySelector(`[data-runtime-question-custom="${index}"]`);
         if (input) {
-          const selected = [...panel.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
-            .map((item) => item.dataset.optionValue)
-            .filter(Boolean);
-          input.value = selected.join("；");
+          input.value = [...panel.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+            .map((item) => item.dataset.optionValue).filter(Boolean).join("；");
         }
       });
     });
-
     panel.querySelectorAll("[data-runtime-reply]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        const reply = button.dataset.runtimeReply || "once";
-        await submitRuntimeApproval(panel, reply);
-      });
+      button.addEventListener("click", () => submitRuntimeApproval(panel, button.dataset.runtimeReply || "once"));
     });
   });
 }
@@ -2205,58 +2512,44 @@ function bindRuntimeApprovalPanels() {
 async function submitRuntimeApproval(panel, reply) {
   const approvalId = panel.dataset.runtimeApproval;
   const taskId = panel.dataset.runtimeTask;
-  if (!state.activeRoomId || !approvalId || !taskId) {
-    return;
-  }
-
+  if (!state.activeRoomId || !approvalId || !taskId) return;
   const message = String(panel.querySelector(".runtime-approval-message")?.value || "").trim();
   const body = panel.dataset.runtimeType === "question"
     ? { reply, answers: collectRuntimeQuestionAnswers(panel), message }
     : { reply, message };
-
   panel.classList.add("submitting");
-  panel.querySelectorAll("button, input, textarea").forEach((item) => {
-    item.disabled = true;
-  });
-
+  panel.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = true; });
   try {
-    await api(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`, {
-      method: "POST",
-      body
-    });
+    await api(`/api/rooms/${encodeURIComponent(state.activeRoomId)}/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`, { method: "POST", body });
     setTimeout(loadActiveRoom, 300);
   } catch (error) {
     setConnection(error.message);
     panel.classList.remove("submitting");
-    panel.querySelectorAll("button, input, textarea").forEach((item) => {
-      item.disabled = false;
-    });
+    panel.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = false; });
   }
 }
 
 function collectRuntimeQuestionAnswers(panel) {
-  return [...panel.querySelectorAll("[data-runtime-question-index]")]
-    .map((item) => {
-      const index = item.dataset.runtimeQuestionIndex;
-      const selected = [...item.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
-        .map((button) => button.dataset.optionValue)
-        .filter(Boolean);
-      const custom = String(item.querySelector(`[data-runtime-question-custom="${index}"]`)?.value || "").trim();
-      if (custom && !selected.includes(custom)) {
-        selected.push(custom);
-      }
-      return selected;
-    });
+  return [...panel.querySelectorAll("[data-runtime-question-index]")].map((item) => {
+    const index = item.dataset.runtimeQuestionIndex;
+    const selected = [...item.querySelectorAll(`[data-runtime-question-option="${index}"].selected`)]
+      .map((button) => button.dataset.optionValue).filter(Boolean);
+    const custom = String(item.querySelector(`[data-runtime-question-custom="${index}"]`)?.value || "").trim();
+    if (custom && !selected.includes(custom)) selected.push(custom);
+    return selected;
+  });
 }
 
 function collectDecisionPanelContent(panel) {
   const answers = [...panel.querySelectorAll("[data-decision-index]")]
     .map((item) => {
       const index = Number(item.dataset.decisionIndex || 0) + 1;
+      const id = item.dataset.decisionId || "";
       const question = item.dataset.decisionQuestion || `确认点 ${index}`;
       const input = item.querySelector("[data-decision-custom]");
       const answer = String(input?.value || "").trim();
-      return answer ? `${index}. ${question}: ${answer}` : "";
+      const prefix = id ? `${id}.` : `${index}.`;
+      return answer ? `${prefix} ${question}: ${answer}` : "";
     })
     .filter(Boolean);
   const extra = String(panel.querySelector("[data-decision-extra]")?.value || "").trim();
@@ -2268,8 +2561,12 @@ function collectDecisionPanelContent(panel) {
 
 function normalizeDecisionPoints(points) {
   const normalized = points
-    .flatMap(splitConfirmationText)
-    .map(parseDecisionPoint)
+    .flatMap((point) => {
+      if (point && typeof point === "object") {
+        return [normalizeDecisionPointObject(point)];
+      }
+      return splitConfirmationText(point).map(parseDecisionPoint);
+    })
     .filter((point) => point.question || point.hint);
 
   return normalized.length
@@ -2277,11 +2574,98 @@ function normalizeDecisionPoints(points) {
     : [{ question: "确认意见", hint: "", options: [] }];
 }
 
+function displayConfirmationPointBrief(value) {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object") {
+    const id = value.q_id || value.qid || value.id || value.key || "";
+    const question = value.question || value.title || value.label || value.prompt || value.content || value.text || value.description || "";
+    return [id, question].filter(Boolean).join(" ");
+  }
+  return String(value);
+}
+
 function splitConfirmationText(value) {
   return String(value || "")
     .replace(/^任务等待人工确认[:：]?/, "")
     .split(/\n+|[；;]/)
     .map((item) => item.replace(/^[\s#>*\-0-9.、]+/, "").trim())
+    .filter(Boolean);
+}
+
+function normalizeDecisionPointObject(value) {
+  const question = firstDecisionObjectText(value, [
+    "question",
+    "title",
+    "label",
+    "prompt",
+    "content",
+    "text",
+    "description",
+    "issue",
+    "name"
+  ]);
+  const hintParts = [
+    firstDecisionObjectText(value, ["category", "type", "kind"]),
+    firstDecisionObjectText(value, ["hint", "detail", "details", "reason", "suggestion", "recommendation"]),
+    firstDecisionObjectText(value, ["current_inference", "currentInference", "inference"])
+      ? `当前推断: ${firstDecisionObjectText(value, ["current_inference", "currentInference", "inference"])}`
+      : "",
+    value.inferred === true ? "该确认点包含系统推断，请确认是否采纳。" : "",
+    firstDecisionObjectText(value, ["default_if_no_response", "defaultIfNoResponse", "default", "default_value", "defaultValue"])
+      ? `默认处理: ${firstDecisionObjectText(value, ["default_if_no_response", "defaultIfNoResponse", "default", "default_value", "defaultValue"])}`
+      : ""
+  ].filter(Boolean);
+  const explicitOptions = normalizeDecisionObjectOptions(value.options || value.choices || value.candidates || value.values);
+  const hint = hintParts
+    .filter((item, index, source) => source.indexOf(item) === index)
+    .filter((item) => normalizeDecisionText(item) !== normalizeDecisionText(question))
+    .join(" ");
+  return {
+    id: firstDecisionObjectText(value, ["q_id", "qid", "id", "key"]),
+    question: question || "确认点",
+    hint,
+    options: explicitOptions.length ? explicitOptions : extractDecisionOptions(question, hint)
+  };
+}
+
+function firstDecisionObjectText(source, keys) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+    if (value != null && typeof value !== "object") {
+      const text = String(value).trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
+function normalizeDecisionObjectOptions(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index) => {
+      if (typeof item === "string") {
+        return { label: optionLabel(index), value: item.trim() };
+      }
+      if (item && typeof item === "object") {
+        const label = firstDecisionObjectText(item, ["label", "key", "name"]) || optionLabel(index);
+        const optionValue = firstDecisionObjectText(item, ["value", "text", "title", "content", "description"]);
+        return optionValue ? { label, value: optionValue } : null;
+      }
+      const text = String(item || "").trim();
+      return text ? { label: optionLabel(index), value: text } : null;
+    })
     .filter(Boolean);
 }
 
@@ -2472,15 +2856,16 @@ function toggleMessageBubble(bubble, messageId) {
   }
   const collapsed = bubble.classList.toggle("collapsed");
   const button = bubble.querySelector("[data-message-toggle]");
+  const isStream = bubble.classList.contains("stream-bubble");
   if (collapsed) {
     state.expandedMessages.delete(messageId);
     if (button) {
-      button.textContent = "展开";
+      button.textContent = isStream ? "查看过程" : "展开";
     }
   } else {
     state.expandedMessages.add(messageId);
     if (button) {
-      button.textContent = "收起";
+      button.textContent = isStream ? "收起过程" : "收起";
     }
   }
 }
@@ -2506,9 +2891,13 @@ function findAgentDisplay(agentId) {
 }
 
 function stageTitleFromEvent(event) {
-  const task = state.tasks.find((item) => item.id === event.taskId);
-  const stage = task?.stages?.find((item) => item.id === event.stageId);
+  const stage = findTaskStage(event.taskId, event.stageId);
   return stage?.title || "";
+}
+
+function findTaskStage(taskId, stageId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  return task?.stages?.find((item) => item.id === stageId) || null;
 }
 
 function activeTask() {
@@ -2519,9 +2908,11 @@ function statusLabel(status) {
   return ({
     queued: "等待中",
     running: "运行中",
-    retrying: "重连中",
+    auditing: "后台审计",
+    retrying: "等待中",
     pending: "待确认",
     approval_pending: "待授权",
+    delivered: "已交付",
     completed: "已完成",
     failed: "已中断",
     cancelled: "已终止"

@@ -232,6 +232,19 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
       return;
     }
 
+    if (req.method === "POST"
+      && ["runtime", "openclaw"].includes(parts[3])
+      && parts[4] === "reconnect") {
+      const room = await store.getRoom(roomId);
+      if (!room) {
+        sendError(res, 404, "Room not found");
+        return;
+      }
+      const result = await reconnectRuntime({ roomId, adapter, events });
+      sendJson(res, 200, result);
+      return;
+    }
+
     if (req.method === "POST" && parts[3] === "messages") {
       const body = await readJsonBody(req);
       const result = await orchestrator.submitHumanMessage(roomId, body);
@@ -296,6 +309,34 @@ async function routeApi({ req, res, store, events, adapter, agentFiles, orchestr
   }
 
   sendError(res, 404, "Not found");
+}
+
+async function reconnectRuntime({ roomId, adapter, events }) {
+  await events.publish(roomId, "runtime.reconnect_started", {
+    roomId,
+    source: "manual"
+  });
+
+  try {
+    const result = typeof adapter.reconnect === "function"
+      ? await adapter.reconnect()
+      : { status: "checked", mode: "stateless", agents: (await adapter.listAgents()).length };
+    const event = await events.publish(roomId, "runtime.reconnect_completed", {
+      roomId,
+      source: "manual",
+      result
+    });
+    return { ok: true, result, event };
+  } catch (error) {
+    const event = await events.publish(roomId, "runtime.reconnect_failed", {
+      roomId,
+      source: "manual",
+      error: error.message || "Runtime reconnect failed"
+    });
+    error.statusCode = 502;
+    error.event = event;
+    throw error;
+  }
 }
 
 async function listProfiledAgents(adapter, store) {

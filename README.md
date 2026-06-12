@@ -116,6 +116,8 @@ cd /Users/adong/multi_agent
 TEAMROOM_PORT=8786 \
 TEAMROOM_ADAPTER=opencode \
 OPENCODE_BASE_URL=http://127.0.0.1:4096 \
+OPENCODE_DIRECTORY=/Users/wicky/Documents/Codex/2026-06-08/openclaw-opencode-openclaw-agent-agent-agent/opencode_foxagent \
+OPENCODE_WORKSPACE=/Users/wicky/Documents/Codex/2026-06-08/openclaw-opencode-openclaw-agent-agent-agent/opencode_foxagent \
 npm start
 ```
 

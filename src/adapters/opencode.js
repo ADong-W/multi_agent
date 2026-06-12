@@ -44,7 +44,8 @@ export function createOpenCodeAdapter(config) {
         agentId,
         initial: response,
         hooks,
-        handled: handledRuntimeRequests
+        handled: handledRuntimeRequests,
+        onProgress: context.onProgress
       });
 
       const agentError = extractMessageError(response);
@@ -53,11 +54,41 @@ export function createOpenCodeAdapter(config) {
       }
 
       const summary = extractResponseText(response) || await fetchLatestAssistantText(options, sessionId, agentId);
+      await emitProgress(context.onProgress, summary, false, "final");
       return {
         status: "completed",
         summary: summary || "OpenCode agent completed the run, but no assistant text was found.",
         artifacts: [],
         nextActions: []
+      };
+    },
+
+    async getLatestResult(agentId, context = {}) {
+      const sessionId = sessions.get(sessionKeyFor(options, agentId, context));
+      if (!sessionId) {
+        return null;
+      }
+      const summary = await fetchLatestAssistantText(options, sessionId, agentId);
+      if (!summary) {
+        return null;
+      }
+      return {
+        status: "completed",
+        summary,
+        artifacts: [],
+        nextActions: []
+      };
+    },
+
+    async reconnect() {
+      sessions.clear();
+      const startedAt = Date.now();
+      const payload = await requestJson(options, "/agent");
+      return {
+        status: "connected",
+        mode: "opencode",
+        agents: normalizeAgentList(payload, options).length,
+        elapsedMs: Date.now() - startedAt
       };
     },
 
@@ -75,8 +106,9 @@ async function watchRuntimeRequests({ options, sessionId, agentId, hooks, handle
   }
 }
 
-async function waitForAssistantCompletion({ options, sessionId, agentId, initial, hooks, handled }) {
+async function waitForAssistantCompletion({ options, sessionId, agentId, initial, hooks, handled, onProgress }) {
   let latest = initial;
+  let lastProgress = "";
   const messageId = assistantMessageId(initial);
   const deadline = Date.now() + Math.max(options.timeoutMs, 30 * 60 * 1000);
   while (Date.now() < deadline) {
@@ -89,6 +121,11 @@ async function waitForAssistantCompletion({ options, sessionId, agentId, initial
     if (refreshed) {
       latest = refreshed;
     }
+    const progressText = extractResponseText(latest);
+    if (progressText && progressText !== lastProgress) {
+      lastProgress = progressText;
+      await emitProgress(onProgress, progressText, false, "running");
+    }
 
     if (isAssistantComplete(latest)) {
       return latest;
@@ -96,6 +133,17 @@ async function waitForAssistantCompletion({ options, sessionId, agentId, initial
     await sleep(1000);
   }
   return latest;
+}
+
+async function emitProgress(onProgress, text, append = false, state = "") {
+  if (typeof onProgress !== "function" || !String(text || "").trim()) {
+    return;
+  }
+  await Promise.resolve(onProgress({
+    text: String(text),
+    append,
+    state
+  })).catch(() => {});
 }
 
 function assistantMessageId(payload) {
