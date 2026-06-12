@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TeamRoom · Airtable 风格预览</title>
+  <style>
+    :root {
+      --ink: #181d26;
+      --body: #333840;
+      --muted: #68707c;
+      --hairline: #dde1e6;
+      --canvas: #ffffff;
+      --soft: #f7f8fa;
+      --sidebar: #f2f4f7;
+      --blue: #1b61c9;
+      --blue-soft: #eaf2ff;
+      --coral: #aa2d00;
+      --coral-soft: #fff0ea;
+      --forest: #0a2e0e;
+      --forest-soft: #eaf5ec;
+      --peach: #fcab79;
+      --mint: #a8d8c4;
+      --yellow: #f4d35e;
+      --cream: #f5e9d4;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 12px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background: var(--canvas);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--canvas); color: var(--body); }
+    button, textarea, input { font: inherit; }
+    button { cursor: pointer; }
+    .icon { width: 17px; height: 17px; stroke-width: 1.8; }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 48px 1fr;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr) auto;
+      align-items: center;
+      border-bottom: 1px solid var(--hairline);
+      background: #fff;
+      padding: 0 12px;
+      gap: 12px;
+    }
+
+    .brand, .room-title, .top-actions, .row, .agent-line, .status-line {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand { gap: 9px; min-width: 0; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      background: var(--ink);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .brand strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
+    .brand small { color: var(--muted); font-size: 11px; margin-left: 2px; }
+
+    .room-title { justify-content: center; gap: 8px; min-width: 0; }
+    .room-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .connection {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #21733c;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .connection::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #39a75c; }
+
+    .top-actions { gap: 6px; }
+    .icon-button, .secondary, .primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      padding: 0 11px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .icon-button { width: 32px; padding: 0; border: 1px solid var(--hairline); color: var(--body); background: #fff; }
+    .secondary { border: 1px solid var(--hairline); color: var(--ink); background: #fff; }
+    .primary { border: 1px solid var(--ink); color: #fff; background: var(--ink); }
+    .icon-button:active, .secondary:active, .primary:active { transform: translateY(1px); }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 260px minmax(460px, 1fr) 350px;
+    }
+
+    .leftbar, .inspector { min-height: 0; overflow: auto; background: var(--sidebar); }
+    .leftbar { border-right: 1px solid var(--hairline); }
+    .inspector { border-left: 1px solid var(--hairline); background: #fff; }
+
+    .side-section { padding: 14px 12px; border-bottom: 1px solid var(--hairline); }
+    .section-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 0 4px 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .section-label button { border: 0; background: transparent; color: var(--muted); padding: 1px; }
+
+    .room-item, .agent-item {
+      width: 100%;
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--body);
+      text-align: left;
+    }
+    .room-item { padding: 8px 9px; margin-bottom: 3px; }
+    .room-item.active { background: #fff; box-shadow: inset 3px 0 var(--blue); color: var(--ink); }
+    .room-item .row { justify-content: space-between; gap: 8px; }
+    .room-item strong { font-size: 12px; font-weight: 600; }
+    .room-item small { color: var(--muted); font-size: 10px; }
+
+    .agent-item {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) 20px;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 8px;
+      margin-bottom: 2px;
+    }
+    .agent-item:hover { background: rgba(255,255,255,.72); }
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      color: var(--ink);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .avatar.supervisor { background: #eee3bd; color: #655b3d; }
+    .avatar.dim { background: #dce8da; color: #4c624f; }
+    .avatar.form { background: #f0deda; color: #704f4a; }
+    .avatar.auth { background: #e1dfec; color: #55536a; }
+    .agent-copy { min-width: 0; }
+    .agent-copy strong, .agent-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-copy strong { color: var(--ink); font-size: 12px; font-weight: 500; }
+    .agent-copy small { color: var(--muted); font-size: 10px; margin-top: 2px; }
+    .member-toggle {
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      background: #fff;
+      color: var(--blue);
+      font-size: 12px;
+      line-height: 1;
+    }
+    .member-toggle.in-room { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+    .conversation { min-width: 0; min-height: 0; display: grid; grid-template-rows: 45px 1fr auto; background: #fff; }
+    .viewbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .view-tabs { display: flex; height: 100%; align-items: stretch; }
+    .view-tab {
+      position: relative;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 0 13px;
+      font-size: 12px;
+    }
+    .view-tab.active { color: var(--ink); font-weight: 600; }
+    .view-tab.active::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px; background: var(--blue); }
+    .view-meta { color: var(--muted); font-size: 11px; }
+
+    .feed { overflow: auto; padding: 22px max(22px, calc((100% - 760px) / 2)); }
+    .date-rule { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 10px; margin: 2px 0 20px; }
+    .date-rule::before, .date-rule::after { content: ""; height: 1px; background: var(--hairline); flex: 1; }
+
+    .message { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; margin-bottom: 20px; }
+    .message.user { grid-template-columns: minmax(0, 1fr); }
+    .message.user .bubble {
+      justify-self: end;
+      max-width: 76%;
+      border-color: #d5dce0;
+      background: #e9eef0;
+      color: #293238;
+    }
+    .bubble { min-width: 0; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 12px 14px; background: #fff; }
+    .message-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+    .message-head strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+    .message-head time { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .bubble p { margin: 0; font-size: 13px; line-height: 1.55; }
+    .bubble p + p { margin-top: 7px; }
+
+    .analysis {
+      margin: 8px 0 20px 40px;
+      border-left: 3px solid var(--mint);
+      background: var(--forest-soft);
+      border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    }
+    .analysis summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 10px 12px;
+      color: var(--forest);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .analysis pre { margin: 0; padding: 0 12px 12px; white-space: pre-wrap; color: #34573a; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .confirmation {
+      margin: 8px 0 22px 40px;
+      border: 1px solid #e7b8a7;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      background: #fff;
+    }
+    .confirmation-head { padding: 12px 14px; background: var(--coral-soft); border-bottom: 1px solid #efd2c7; }
+    .confirmation-head span { color: var(--coral); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .confirmation-head strong { display: block; color: var(--ink); font-size: 13px; margin-top: 4px; }
+    .confirmation-body { padding: 13px 14px; }
+    .confirmation-body p { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .choice {
+      display: flex;
+      width: 100%;
+      padding: 9px 10px;
+      margin-top: 6px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-sm);
+      background: #fff;
+      color: var(--body);
+      text-align: left;
+      font-size: 12px;
+    }
+    .choice.selected { border-color: var(--blue); background: var(--blue-soft); color: #153f7c; }
+    .confirmation-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+
+    .composer { padding: 12px 16px 14px; border-top: 1px solid var(--hairline); background: #fff; }
+    .composer-box { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 10px; border: 1px solid #c9ced5; border-radius: var(--radius-md); padding: 9px 9px 9px 12px; }
+    .composer textarea { min-height: 38px; max-height: 110px; resize: none; border: 0; outline: 0; color: var(--ink); }
+    .composer textarea::placeholder { color: #9399a2; }
+
+    .inspector-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--hairline); }
+    .inspector-head .row { justify-content: space-between; }
+    .inspector-head h2 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+    .task-id { color: var(--muted); font: 10px ui-monospace, monospace; margin-top: 5px; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border-radius: var(--radius-sm);
+      padding: 4px 7px;
+      background: #fff4cf;
+      color: #755800;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .status-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #d9a441; }
+
+    .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--hairline); }
+    .metric { padding: 12px 10px; border-right: 1px solid var(--hairline); }
+    .metric:last-child { border-right: 0; }
+    .metric small, .metric strong { display: block; }
+    .metric small { color: var(--muted); font-size: 9px; }
+    .metric strong { color: var(--ink); font-size: 13px; margin-top: 4px; font-weight: 600; }
+
+    .stage-table { padding: 14px 12px; }
+    .table-head, .stage-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) 64px; align-items: center; gap: 7px; }
+    .table-head { color: var(--muted); font-size: 9px; padding: 0 6px 7px; }
+    .stage-row { min-height: 48px; padding: 7px 6px; border-top: 1px solid #edf0f3; }
+    .stage-index { color: var(--muted); font-size: 10px; }
+    .stage-main { min-width: 0; }
+    .stage-main strong, .stage-main small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stage-main strong { color: var(--ink); font-size: 11px; font-weight: 500; }
+    .stage-main small { color: var(--muted); font-size: 9px; margin-top: 3px; }
+    .stage-state { justify-self: end; border-radius: var(--radius-sm); padding: 4px 6px; font-size: 9px; }
+    .stage-state.done { background: var(--forest-soft); color: #21733c; }
+    .stage-state.running { background: #fff4cf; color: #755800; }
+    .stage-state.waiting { background: #eef0f3; color: #69717d; }
+
+    .activity { padding: 2px 16px 18px; }
+    .activity h3 { margin: 4px 0 10px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .activity-item { display: grid; grid-template-columns: 8px 1fr; gap: 9px; padding: 7px 0; }
+    .activity-dot { width: 8px; height: 8px; margin-top: 3px; border-radius: 50%; background: var(--mint); }
+    .activity-item:nth-child(3) .activity-dot { background: var(--yellow); }
+    .activity-item p { margin: 0; color: var(--body); font-size: 10px; line-height: 1.45; }
+    .activity-item time { color: var(--muted); font-size: 9px; }
+
+    @media (max-width: 1120px) {
+      .workspace { grid-template-columns: 220px minmax(420px, 1fr) 300px; }
+      .topbar { grid-template-columns: 220px minmax(0, 1fr) auto; }
+      .top-actions .secondary span { display: none; }
+    }
+    @media (max-width: 850px) {
+      .workspace { grid-template-columns: 190px minmax(0, 1fr); }
+      .inspector { display: none; }
+      .topbar { grid-template-columns: 190px minmax(0, 1fr) auto; }
+      .brand small, .top-actions .secondary { display: none; }
+    }
+    @media (max-width: 620px) {
+      .app { height: auto; min-height: 100vh; overflow: visible; }
+      .topbar { position: sticky; top: 0; z-index: 5; grid-template-columns: 1fr auto; }
+      .room-title { display: none; }
+      .workspace { display: block; }
+      .leftbar { display: none; }
+      .conversation { min-height: calc(100vh - 48px); }
+      .feed { padding: 18px 12px; }
+      .message.user .bubble { max-width: 90%; }
+      .analysis, .confirmation { margin-left: 0; }
+    }
+  </style>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">TR</span>
+        <strong>TeamRoom</strong>
+        <small>实施设计协作</small>
+      </div>
+      <div class="room-title">
+        <strong>产品维度与表单联动</strong>
+        <span class="connection">OpenCode 已连接</span>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button" title="重新连接"><i class="icon" data-lucide="refresh-cw"></i></button>
+        <button class="secondary"><i class="icon" data-lucide="settings-2"></i><span>配置</span></button>
+        <button class="primary"><i class="icon" data-lucide="plus"></i>新任务</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="leftbar">
+        <section class="side-section">
+          <div class="section-label"><span>协作室</span><button title="新建协作室"><i class="icon" data-lucide="plus"></i></button></div>
+          <button class="room-item active">
+            <span class="row"><strong>产品维度与表单联动</strong><small>4</small></span>
+            <small>任务运行中 · 28m</small>
+          </button>
+          <button class="room-item">
+            <span class="row"><strong>权限模型设计</strong><small>3</small></span>
+            <small>昨天完成</small>
+          </button>
+          <button class="room-item">
+            <span class="row"><strong>月结表单复盘</strong><small>2</small></span>
+            <small>仅对话</small>
+          </button>
+        </section>
+
+        <section class="side-section">
+          <div class="section-label"><span>Agents</span><button title="刷新 Agent"><i class="icon" data-lucide="refresh-cw"></i></button></div>
+          <button class="agent-item">
+            <span class="avatar supervisor">总控</span>
+            <span class="agent-copy"><strong>FOX Supervisor</strong><small>需求分析 · 调度 · 审计</small></span>
+            <span class="member-toggle in-room">✓</span>
+          </button>
+          <button class="agent-item">
+            <span class="avatar dim">DIM</span>
+            <span class="agent-copy"><strong>Dimension Agent</strong><small>维度与模型设计</small></span>
+            <span class="member-toggle in-room">✓</span>
+          </button>
+          <button class="agent-item">
+            <span class="avatar form">FORM</span>
+            <span class="agent-copy"><strong>Form Agent</strong><small>表单结构与取数逻辑</small></span>
+            <span class="member-toggle in-room">✓</span>
+          </button>
+          <button class="agent-item">
+            <span class="avatar auth">AUTH</span>
+            <span class="agent-copy"><strong>Auth Agent</strong><small>角色与数据权限</small></span>
+            <span class="member-toggle">+</span>
+          </button>
+        </section>
+      </aside>
+
+      <section class="conversation">
+        <div class="viewbar">
+          <nav class="view-tabs">
+            <button class="view-tab active" data-view="conversation">对话</button>
+            <button class="view-tab" data-view="timeline">时间线</button>
+            <button class="view-tab" data-view="artifacts">交付件</button>
+          </nav>
+          <span class="view-meta">协作室 ID · room_9fa32c</span>
+        </div>
+
+        <div class="feed" id="feed">
+          <div class="date-rule">今天 14:08</div>
+
+          <article class="message user">
+            <div class="bubble">
+              <p>帮我在产品下新增一个 CNBG_光，并检查一下表单是否需要修改，如果需要修改给出修改建议。</p>
+            </div>
+          </article>
+
+          <article class="message">
+            <span class="avatar supervisor">总控</span>
+            <div class="bubble">
+              <div class="message-head"><strong>FOX Supervisor · 需求分析</strong><time>14:08</time></div>
+              <p>已识别为 L2 联动任务。先由维度 Agent 新增产品成员，再根据联动规则派发表单 Agent 校验相关 Sheet。</p>
+              <p>风险预检为 GREEN，无需人工确认，已完成工作区快照。</p>
+            </div>
+          </article>
+
+          <details class="analysis">
+            <summary><span>已处理 1m 42s · 查看总控过程</span><i class="icon" data-lucide="chevron-down"></i></summary>
+            <pre>读取 MEMORY.md 与 working/ 索引
+匹配对象：产品维度
+动作：ADD_MEMBER
+成员名称：CNBG_光
+联动判断：产品维度变更可能影响表单行成员
+生成 TEAMROOM_DISPATCH_JSON → dim-model-agent</pre>
+          </details>
+
+          <article class="message">
+            <span class="avatar dim">DIM</span>
+            <div class="bubble">
+              <div class="message-head"><strong>Dimension Agent · 维度成员写入</strong><time>14:12</time></div>
+              <p>已在产品维度下新增成员 <strong>CNBG_光</strong>，编码与父级关系校验通过，目标工作簿已原地更新。</p>
+            </div>
+          </article>
+
+          <article class="message">
+            <span class="avatar form">FORM</span>
+            <div class="bubble">
+              <div class="message-head"><strong>Form Agent · 表单联动校验</strong><time>14:24</time></div>
+              <p>已完成 3 个相关 Sheet 的扫描。发现“本期新增 NMA”行的系统推送列为空，与已确认规则存在冲突，需要再次确认。</p>
+            </div>
+          </article>
+
+          <section class="confirmation">
+            <div class="confirmation-head">
+              <span>需要人工确认</span>
+              <strong>本期新增 NMA 行是否需要补写系统推送逻辑？</strong>
+            </div>
+            <div class="confirmation-body">
+              <p>Row 37 / 41 / 45 当前为空。上一轮选择了“需要”，可能是 Form Agent 漏执行，也可能是该行本就应保持手工录入。</p>
+              <button class="choice">保持为空，不写入系统推送列</button>
+              <button class="choice selected">Form Agent 漏执行，需要补写 3 行取数逻辑</button>
+              <div class="confirmation-actions">
+                <button class="secondary">稍后处理</button>
+                <button class="primary" id="confirmButton">确认并继续</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <form class="composer" id="composer">
+          <div class="composer-box">
+            <textarea id="messageInput" placeholder="补充信息、回答确认点或继续对话"></textarea>
+            <button class="primary" type="submit"><i class="icon" data-lucide="send"></i>发送</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="inspector">
+        <div class="inspector-head">
+          <div class="row">
+            <h2>当前任务</h2>
+            <span class="status-badge">待确认</span>
+          </div>
+          <div class="task-id">FA-20260612-014 · room_9fa32c</div>
+        </div>
+        <div class="summary-grid">
+          <div class="metric"><small>总耗时</small><strong>28m 16s</strong></div>
+          <div class="metric"><small>已完成</small><strong>3 / 5</strong></div>
+          <div class="metric"><small>交付件</small><strong>2</strong></div>
+        </div>
+        <section class="stage-table">
+          <div class="section-label"><span>任务阶段</span><button title="更多"><i class="icon" data-lucide="more-horizontal"></i></button></div>
+          <div class="table-head"><span>#</span><span>阶段 / Agent</span><span>状态</span></div>
+          <div class="stage-row">
+            <span class="stage-index">1</span>
+            <span class="stage-main"><strong>需求分析与风险预检</strong><small>FOX Supervisor · 1m 42s</small></span>
+            <span class="stage-state done">已完成</span>
+          </div>
+          <div class="stage-row">
+            <span class="stage-index">2</span>
+            <span class="stage-main"><strong>维度成员写入</strong><small>Dimension Agent · 3m 18s</small></span>
+            <span class="stage-state done">已完成</span>
+          </div>
+          <div class="stage-row">
+            <span class="stage-index">3</span>
+            <span class="stage-main"><strong>表单联动校验</strong><small>Form Agent · 11m 07s</small></span>
+            <span class="stage-state done">已完成</span>
+          </div>
+          <div class="stage-row">
+            <span class="stage-index">4</span>
+            <span class="stage-main"><strong>执行缺口确认</strong><small>等待用户选择 · 12m 09s</small></span>
+            <span class="stage-state running">进行中</span>
+          </div>
+          <div class="stage-row">
+            <span class="stage-index">5</span>
+            <span class="stage-main"><strong>闭环审计与交付</strong><small>FOX Supervisor</small></span>
+            <span class="stage-state waiting">未开始</span>
+          </div>
+        </section>
+        <section class="activity">
+          <h3>最近动态</h3>
+          <div class="activity-item"><span class="activity-dot"></span><div><p>表单 Agent 返回执行缺口</p><time>2 分钟前</time></div></div>
+          <div class="activity-item"><span class="activity-dot"></span><div><p>TeamRoom 已暂停后续派发，等待人工确认</p><time>2 分钟前</time></div></div>
+          <div class="activity-item"><span class="activity-dot"></span><div><p>阶段计时持续保留，重连后不会归零</p><time>刚刚</time></div></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    if (window.lucide) {
+      lucide.createIcons();
+    }
+
+    document.querySelectorAll(".choice").forEach((choice) => {
+      choice.addEventListener("click", () => {
+        document.querySelectorAll(".choice").forEach((item) => item.classList.remove("selected"));
+        choice.classList.add("selected");
+      });
+    });
+
+    document.querySelectorAll(".view-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".view-tab").forEach((item) => item.classList.remove("active"));
+        tab.classList.add("active");
+      });
+    });
+
+    document.getElementById("confirmButton").addEventListener("click", () => {
+      const selected = document.querySelector(".choice.selected");
+      if (!selected) return;
+      document.querySelector(".confirmation").innerHTML =
+        '<div class="confirmation-head"><span>确认已提交</span><strong>' + selected.textContent + '</strong></div>';
+    });
+
+    document.getElementById("composer").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const input = document.getElementById("messageInput");
+      const value = input.value.trim();
+      if (!value) return;
+      const article = document.createElement("article");
+      article.className = "message user";
+      article.innerHTML = '<div class="bubble"><p></p></div>';
+      article.querySelector("p").textContent = value;
+      document.getElementById("feed").appendChild(article);
+      input.value = "";
+      article.scrollIntoView({ behavior: "smooth", block: "end" });
+    });
+  </script>
+</body>
+</html>
