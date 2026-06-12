@@ -1523,6 +1523,7 @@ function buildBackgroundAuditInput({ room, task, stage, member, previousOutputs,
 
 function supervisorRelayGuardrails() {
   return [
+    "TEAMROOM_EXECUTION_MODE=relay",
     "TeamRoom 边界:",
     "- TeamRoom 只做中转、分发、等待、可视化和超时续接；不替代你的 SOP 判断。",
     "- 你必须按自己的标准 SOP 完成解析、Probe、Assessment、Pre-Dispatch Validation、ssot_workspace_manager bootstrap/snapshot、反馈分诊、联动检查和闭环审计。",

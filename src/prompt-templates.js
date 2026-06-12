@@ -6,6 +6,7 @@ export const DEFAULT_PROMPT_TEMPLATES = {
     "{{roomMembers}}",
     "",
     "你的职责:",
+    "- 当前运行标记: TEAMROOM_EXECUTION_MODE=relay",
     "- 按你的标准 SOP 逐步执行解析、Probe、Assessment、Pre-Dispatch Validation、ssot_workspace_manager bootstrap/snapshot、双轨派发、反馈分诊、联动检查和闭环审计",
     "- TeamRoom 只负责中转分发、等待续接和可视化，不替代你的 SOP 步骤",
     "- 需要用户确认时，在 confirmation_points 中给出业务问题，TeamRoom 会转给用户",
