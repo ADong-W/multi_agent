@@ -662,7 +662,7 @@ async function loadHistoricalEvents() {
   }
   const payload = await api(`/api/v2/rooms/${encodeURIComponent(state.activeRoomId)}/events/history?limit=500`)
     .catch(() => ({ events: [] }));
-  state.events = dedupeEvents(payload.events || []);
+  state.events = compactDisplayEvents(dedupeEvents(payload.events || []));
 }
 
 function dedupeEvents(events = []) {
@@ -675,6 +675,33 @@ function dedupeEvents(events = []) {
   return [...map.values()].sort((left, right) =>
     String(left.timestamp || "").localeCompare(String(right.timestamp || ""))
   );
+}
+
+function compactDisplayEvents(events = []) {
+  const completedRunIds = new Set(events
+    .filter((event) => event.type === "v2.run.output.completed")
+    .map((event) => event.taskId || event.payload?.taskId || event.payload?.runId)
+    .filter(Boolean));
+  const streamByKey = new Map();
+  const result = [];
+  for (const event of events) {
+    const taskId = event.taskId || event.payload?.taskId || event.payload?.runId;
+    if (event.type === "v2.run.output.delta" && completedRunIds.has(taskId)) {
+      continue;
+    }
+    if (event.type === "v2.run.output.delta") {
+      const key = `run:${taskId || ""}`;
+      if (event.payload?.append && streamByKey.has(key)) {
+        const previous = streamByKey.get(key);
+        previous.payload.content = `${previous.payload.content || ""}${event.payload.content || ""}`;
+        previous.timestamp = event.timestamp;
+        continue;
+      }
+      streamByKey.set(key, event);
+    }
+    result.push(event);
+  }
+  return result;
 }
 
 function appendLocalEvent(event) {
@@ -2276,6 +2303,9 @@ function bodyForEvent(event, payload) {
 
 function eventToMessage(event) {
   const payload = event.payload || {};
+  if (String(event.type || "").startsWith("v2.invocation.")) {
+    return invocationEventToMessage(event, payload);
+  }
   if (isInternalConversationEvent(event.type)) {
     return null;
   }
@@ -2645,6 +2675,65 @@ function eventToMessage(event) {
   return null;
 }
 
+function invocationEventToMessage(event, payload = {}) {
+  if (event.type === "v2.invocation.updated") {
+    return null;
+  }
+  const agentId = payload.agentId
+    || payload.part?.state?.input?.subagent_type
+    || payload.session?.agent
+    || "";
+  const title = cleanInvocationTitle(
+    payload.title
+      || payload.part?.state?.input?.description
+      || payload.session?.title
+      || ""
+  );
+  if (!agentId && !title) {
+    return null;
+  }
+  const agent = findAgentDisplay(agentId);
+  const agentName = agentId ? agent.name : "子 Agent";
+  const suffix = title ? `：${title}` : "";
+  const taskId = event.taskId || payload.taskId || payload.runId;
+  if (event.type === "v2.invocation.started") {
+    return {
+      id: event.id,
+      taskId,
+      kind: "system process",
+      time: event.timestamp,
+      body: `正在调用 ${agentName}${suffix}`
+    };
+  }
+  if (event.type === "v2.invocation.completed") {
+    return {
+      id: event.id,
+      taskId,
+      kind: "system process",
+      time: event.timestamp,
+      body: `${agentName} 已返回${suffix}`
+    };
+  }
+  if (event.type === "v2.invocation.failed") {
+    return {
+      id: event.id,
+      taskId,
+      kind: "system error",
+      time: event.timestamp,
+      body: `${agentName} 执行失败${suffix}${payload.error ? `：${payload.error}` : ""}`
+    };
+  }
+  return null;
+}
+
+function cleanInvocationTitle(value = "") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || /^<task[\s>]/i.test(text) || text.length > 1200) {
+    return "";
+  }
+  return text.length > 80 ? `${text.slice(0, 80)}...` : text;
+}
+
 function isInternalConversationEvent(type) {
   return new Set([
     "v2.run.created",
@@ -2652,10 +2741,7 @@ function isInternalConversationEvent(type) {
     "v2.run.recovering",
     "v2.run.reconciled",
     "v2.run.completed",
-    "v2.invocation.started",
     "v2.invocation.updated",
-    "v2.invocation.completed",
-    "v2.invocation.failed",
     "v2.message.delivered",
     "room.created",
     "room.policy_updated",

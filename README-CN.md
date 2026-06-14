@@ -6,11 +6,37 @@ TeamRoom V2 是一个面向 Agent 协作的轻量中转界面。它不再内置 
 
 ## 快速启动
 
-普通用户可以直接双击：
+普通用户推荐直接双击启动脚本，不需要手动输入命令：
 
 - `启动 TeamRoom.command` / `启动 TeamRoom.cmd`
 - `重启 TeamRoom.command` / `重启 TeamRoom.cmd`
 - `停止 TeamRoom.command` / `停止 TeamRoom.cmd`
+
+文件后缀说明：
+
+- macOS 使用 `.command`
+- Windows 使用 `.cmd`
+
+推荐打包目录：
+
+```text
+TeamRoom-Package/
+  TeamRoom/
+    启动 TeamRoom.command
+    启动 TeamRoom.cmd
+    ...
+  opencode_foxagent/
+    opencode.json
+    input/
+    ...
+```
+
+当 `opencode_foxagent` 与 `TeamRoom` 放在同一层目录时，启动脚本会自动识别 OpenCode 项目，并默认使用“由 TeamRoom 启动本机 OpenCode”的方式。若没有识别到项目，首次进入页面后可以在“连接与设置”里选择项目目录。
+
+运行要求：
+
+- Node.js 22 或更高版本
+- 如需由 TeamRoom 启动 OpenCode，本机需要已安装 `opencode` 命令
 
 也可以在终端运行：
 
@@ -25,6 +51,8 @@ http://127.0.0.1:8787
 ```
 
 ## OpenCode 接入方式
+
+普通用户无需阅读本节；本节主要给需要排查运行细节或手动接入 OpenCode 的用户。
 
 推荐方式一：先启动 OpenCode，再让 TeamRoom 连接。
 
@@ -49,6 +77,8 @@ npm start
 ```
 
 推荐方式二：由 TeamRoom 启动本机 OpenCode。首次进入页面时选择“由 TeamRoom 启动本机服务”，并选择 OpenCode 项目文件夹。
+
+如果使用上面的推荐打包目录，并双击 `启动 TeamRoom.command` 或 `启动 TeamRoom.cmd`，TeamRoom 会自动识别 `opencode_foxagent`，通常不需要再手动选择。
 
 ## 文件区
 
