@@ -35,7 +35,7 @@ export class EventHub {
       "x-accel-buffering": "no"
     });
 
-    const events = await this.store.listEvents(roomId, 100);
+    const events = await this.store.listEvents(roomId, 500);
     for (const event of events) {
       res.write(sseFormat(event));
     }

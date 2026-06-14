@@ -1,12 +1,17 @@
 {
   "name": "openclaw-teamroom",
   "version": "0.1.0",
-  "description": "Lightweight multi-agent collaboration room and policy router for OpenClaw-style agents.",
+  "description": "Human-in-the-loop collaboration room for OpenCode and OpenClaw agents.",
   "type": "module",
   "private": true,
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/config.js && node --check src/server.js && node --check src/orchestrator.js && node --check src/policy.js && node --check src/prompt-templates.js && node --check src/openclaw-agent-files.js && node --check src/store.js && node --check src/adapters/mock.js && node --check src/adapters/opencode.js && node --check src/adapters/openclaw-gateway.js && node --check src/plugin/openclaw-teamroom-plugin.js && node --check public/app.js"
+    "teamroom": "node scripts/teamroom-control.mjs start",
+    "restart": "node scripts/teamroom-control.mjs restart",
+    "stop": "node scripts/teamroom-control.mjs stop",
+    "status": "node scripts/teamroom-control.mjs status",
+    "check": "node --check scripts/teamroom-control.mjs && node --check src/config.js && node --check src/events.js && node --check src/server.js && node --check src/store.js && node --check src/utils.js && node --check src/v2/backend-contract.js && node --check src/v2/direct-run-service.js && node --check src/v2/directory-picker.js && node --check src/v2/file-area.js && node --check src/v2/opencode-process-manager.js && node --check src/v2/sqlite-store.js && node --check src/v2/artifact-tracker.js && node --check src/v2/adapters/index.js && node --check src/v2/adapters/mock.js && node --check src/v2/adapters/opencode.js && node --check public/app.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=22"

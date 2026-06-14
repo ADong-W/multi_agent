@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createId, nowIso } from "./utils.js";
-import { normalizePromptTemplates } from "./prompt-templates.js";
 
 function defaultData() {
   return {
     rooms: {},
     tasks: {},
+    v2Runs: {},
+    conversations: {},
+    humanRequests: {},
     agentProfiles: {},
     events: []
   };
@@ -97,6 +99,18 @@ export class JsonStore {
         delete this.data.tasks[taskId];
       }
     }
+    const deletedRunIds = new Set();
+    for (const [runId, run] of Object.entries(this.data.v2Runs || {})) {
+      if (run.roomId === roomId) {
+        deletedRunIds.add(runId);
+        delete this.data.v2Runs[runId];
+      }
+    }
+    for (const [requestId, request] of Object.entries(this.data.humanRequests || {})) {
+      if (request.roomId === roomId || deletedRunIds.has(request.runId)) {
+        delete this.data.humanRequests[requestId];
+      }
+    }
     this.data.events = this.data.events.filter((event) => event.roomId !== roomId);
     await this.save();
     return room;
@@ -127,6 +141,25 @@ export class JsonStore {
     } else {
       room.members.push(normalized);
     }
+    if (!room.mainAgentId) {
+      room.mainAgentId = room.members[0]?.agentId || normalized.agentId;
+      room.mainAgentSource = "auto";
+    }
+    return this.updateRoom(room);
+  }
+
+  async setMainAgent(roomId, agentId, options = {}) {
+    const room = await this.getRoom(roomId);
+    if (!room) {
+      return null;
+    }
+    if (!room.members.some((member) => member.agentId === agentId)) {
+      const error = new Error(`Agent is not a member of room: ${agentId}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    room.mainAgentId = agentId;
+    room.mainAgentSource = options.source || "manual";
     return this.updateRoom(room);
   }
 
@@ -187,6 +220,10 @@ export class JsonStore {
       return null;
     }
     room.members = room.members.filter((member) => member.agentId !== agentId);
+    if (room.mainAgentId === agentId) {
+      room.mainAgentId = room.members[0]?.agentId || "";
+      room.mainAgentSource = room.mainAgentId ? "auto" : "";
+    }
     return this.updateRoom(room);
   }
 
@@ -249,6 +286,119 @@ export class JsonStore {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  async createV2Run({ roomId, conversationId, agentId, goal }) {
+    const timestamp = nowIso();
+    if (!this.data.conversations[conversationId]) {
+      this.data.conversations[conversationId] = {
+        id: conversationId,
+        roomId,
+        agentId,
+        backendSessionId: null,
+        kind: "room_main",
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+    }
+    const run = {
+      id: createId("run"),
+      roomId,
+      conversationId,
+      agentId,
+      goal,
+      status: "queued",
+      backendRunId: null,
+      summary: "",
+      artifacts: [],
+      completionSource: null,
+      createdAt: timestamp,
+      startedAt: null,
+      waitingSince: null,
+      completedAt: null,
+      failedAt: null,
+      cancelledAt: null,
+      error: null,
+      updatedAt: timestamp
+    };
+    this.data.v2Runs[run.id] = run;
+    await this.save();
+    return run;
+  }
+
+  async getV2Run(runId) {
+    return this.data.v2Runs?.[runId] || null;
+  }
+
+  async getActiveV2Run(roomId) {
+    return Object.values(this.data.v2Runs || {})
+      .filter((run) => run.roomId === roomId && !["completed", "failed", "cancelled"].includes(run.status))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] || null;
+  }
+
+  async listV2Runs(roomId) {
+    return Object.values(this.data.v2Runs || {})
+      .filter((run) => run.roomId === roomId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listActiveV2Runs() {
+    return Object.values(this.data.v2Runs || {})
+      .filter((run) => !["completed", "failed", "cancelled", "unknown"].includes(run.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async updateV2Run(run) {
+    run.updatedAt = nowIso();
+    this.data.v2Runs[run.id] = run;
+    await this.save();
+    return run;
+  }
+
+  async getConversation(conversationId) {
+    return this.data.conversations?.[conversationId] || null;
+  }
+
+  async updateConversationBackendSession(conversationId, backendSessionId) {
+    const conversation = await this.getConversation(conversationId);
+    if (!conversation) {
+      return null;
+    }
+    conversation.backendSessionId = backendSessionId;
+    conversation.updatedAt = nowIso();
+    await this.save();
+    return conversation;
+  }
+
+  async createHumanRequest(request) {
+    this.data.humanRequests[request.id] = request;
+    await this.save();
+    return request;
+  }
+
+  async updateHumanRequest(request) {
+    this.data.humanRequests[request.id] = request;
+    await this.save();
+    return request;
+  }
+
+  async getHumanRequest(requestId) {
+    return this.data.humanRequests?.[requestId] || null;
+  }
+
+  async listHumanRequests(runId) {
+    return Object.values(this.data.humanRequests || {})
+      .filter((request) => request.runId === runId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async getV2MigrationSnapshot() {
+    return {
+      runs: Object.values(this.data.v2Runs || {}),
+      humanRequests: Object.values(this.data.humanRequests || {}),
+      events: (this.data.events || []).filter((event) => String(event.type || "").startsWith("v2."))
+    };
+  }
+
   async updateTask(task) {
     task.updatedAt = nowIso();
     this.data.tasks[task.id] = task;
@@ -299,6 +449,17 @@ function normalizePolicyInput(policy = {}) {
 
 function normalizeFallbackDispatch(value) {
   return ["none", "keyword", "all"].includes(value) ? value : "none";
+}
+
+function normalizePromptTemplates(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, template]) => key && typeof template === "string")
+      .map(([key, template]) => [key, template])
+  );
 }
 
 function clampInt(value, fallback, min, max) {

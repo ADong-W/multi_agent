@@ -1,6 +1,12 @@
 data/teamroom.json
 data/teamroom.json.tmp
 data/openclaw-device.json
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/teamroom*.pid
+data/teamroom*.log
+data/files/
 node_modules/
 backups/
 .DS_Store

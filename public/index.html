@@ -1,31 +1,59 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>实施设计 Agent 协作驾驶舱</title>
+    <title>TeamRoom 智能协作空间</title>
     <link rel="stylesheet" href="/styles.css?v=20260512-dev2-template-layout-2" />
+    <link rel="stylesheet" href="/airtable-theme.css?v=20260612-formal-1" />
   </head>
   <body>
     <div class="shell">
       <header class="topbar">
-        <div>
-          <h1>实施设计 Agent 协作驾驶舱</h1>
-          <p id="connectionStatus" class="disconnected">Disconnected</p>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">TR</span>
+          <div class="brand-copy">
+            <h1>TeamRoom</h1>
+            <span>智能协作空间</span>
+          </div>
+        </div>
+        <div class="top-room">
+          <strong id="topRoomName">尚未选择协作室</strong>
+          <p id="connectionStatus" class="disconnected">尚未连接</p>
         </div>
         <div class="topbar-actions">
-          <button id="reconnectOpenClawButton" class="reconnect-button" type="button" title="手动刷新执行后端连接" aria-label="手动刷新执行后端连接">
-            <span class="reconnect-icon" aria-hidden="true">↻</span>
-            <span class="reconnect-label">重连</span>
-          </button>
-          <button id="openConfigButton" class="secondary-button" type="button">配置</button>
-          <input id="tokenInput" type="password" autocomplete="off" placeholder="访问 Token" />
-          <button id="saveTokenButton" class="icon-button" title="保存 Token">✓</button>
+          <button id="openConfigButton" class="icon-button" type="button" title="连接与设置" aria-label="连接与设置">⚙</button>
         </div>
       </header>
 
       <main class="layout">
         <aside class="panel sidebar">
+          <section class="section connection-section">
+            <div class="section-header">
+              <h2>当前连接</h2>
+            </div>
+            <div class="connection-card">
+              <div class="connection-card-head">
+                <div>
+                  <strong id="connectionProfileName">本机运行服务</strong>
+                  <small id="connectionBackendLabel">正在识别</small>
+                </div>
+                <span id="connectionProfileStatus" class="connection-pill">未连接</span>
+              </div>
+              <div id="connectionWorkspace" class="connection-path">尚未设置工作区</div>
+              <div class="connection-actions">
+                <button id="reconnectOpenClawButton" class="secondary-button" type="button" title="重新连接运行服务，不会重新发送任务">重连服务</button>
+                <button id="connectionDetailsButton" class="secondary-button" type="button">连接详情</button>
+              </div>
+              <div id="connectionDetails" class="connection-details hidden">
+                <div><span>运行服务</span><strong id="runtimeVersion">尚未检测</strong></div>
+                <div><span>可用能力</span><strong id="runtimeCapabilities">尚未检测</strong></div>
+                <div><span>文件区</span><strong id="runtimeFileArea">尚未设置</strong></div>
+                <button id="copyNativeViewCommandButton" class="secondary-button" type="button">复制原生查看命令</button>
+              </div>
+            </div>
+          </section>
+
           <section class="section rooms-section">
             <div class="section-header">
               <h2>协作室</h2>
@@ -40,8 +68,8 @@
 
           <section class="section agents-section">
             <div class="section-header">
-              <h2>Agents</h2>
-              <button id="refreshAgentsButton" class="icon-button" title="刷新 agents">↻</button>
+              <h2>协作成员</h2>
+              <button id="refreshAgentsButton" class="icon-button" title="刷新成员">↻</button>
             </div>
             <div id="agentsList" class="list"></div>
           </section>
@@ -49,185 +77,152 @@
 
         <section class="panel conversation">
           <div class="conversation-header">
-            <div>
+            <div class="conversation-title">
               <h2 id="activeRoomName">未选择协作室</h2>
               <p id="activeRoomPolicy">协作策略</p>
+            </div>
+            <div class="conversation-actions">
+              <button id="checkCurrentRunButton" class="secondary-button compact-action" type="button" title="只检查当前任务的真实状态">检查当前任务</button>
+              <span id="activeRunTimer" class="run-timer">暂无运行任务</span>
+              <button id="showInspectorButton" class="icon-button" type="button" title="展开任务进展" aria-label="展开任务进展">‹</button>
             </div>
           </div>
 
           <div id="eventsFeed" class="events-feed"></div>
 
-          <form id="chatForm" class="chat-form">
-            <textarea id="chatMessageInput" rows="2" placeholder="参与协作聊天，例如：补充说明... / 继续任务"></textarea>
-            <button type="submit">发送</button>
-          </form>
+          <div class="composer-wrap">
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatMessageInput" rows="2" placeholder="随时补充要求，内容会送回当前助手，不会从头开始"></textarea>
+              <div class="composer-footer">
+                <span id="composerHint">新消息将交给主要助手</span>
+                <button id="chatSubmitButton" type="submit">发送</button>
+              </div>
+            </form>
+          </div>
         </section>
 
-        <aside class="panel inspector">
-          <section class="section task-control-section">
-            <div class="section-header">
-              <h2>任务控制</h2>
+        <aside id="inspector" class="panel inspector">
+          <div class="inspector-head">
+            <strong>任务进展</strong>
+            <button id="collapseInspectorButton" class="icon-button" type="button" title="折叠右栏" aria-label="折叠右栏">›</button>
+          </div>
+
+          <section class="dispatch-panel">
+            <div class="dispatch-heading">
+              <strong>开始新任务</strong>
+              <span>交给主要助手</span>
             </div>
-            <div id="activeTaskStatus" class="active-task-status">暂无当前任务</div>
             <form id="taskForm" class="stack">
-              <textarea id="taskGoalInput" rows="4" placeholder="发布一个新任务。同一协作室同一时间只能有一个任务。"></textarea>
-              <div class="split">
-                <button type="submit">发布任务</button>
-                <button id="cancelTaskButton" type="button" class="danger-button">终止任务</button>
+              <textarea id="taskGoalInput" rows="3" placeholder="描述你接下来想完成的事情"></textarea>
+              <label class="task-file-picker">
+                <span>添加文件</span>
+                <input id="taskFileInput" type="file" multiple />
+              </label>
+              <div id="taskFileList" class="task-file-list"></div>
+              <div class="dispatch-footer">
+                <small id="dispatchHint">当前没有运行中的任务</small>
+                <button id="taskSubmitButton" type="submit">开始</button>
               </div>
             </form>
           </section>
 
-          <section class="section task-flow-section">
-            <div class="section-header">
-              <h2>任务流</h2>
-            </div>
-            <div id="tasksList" class="task-list"></div>
-          </section>
+          <nav class="inspector-tabs" aria-label="任务详情">
+            <button class="active" type="button" data-inspector-tab="progress">当前进展</button>
+            <button type="button" data-inspector-tab="files">文件</button>
+            <button type="button" data-inspector-tab="time">用时</button>
+            <button type="button" data-inspector-tab="history">历史任务</button>
+          </nav>
 
-          <section class="section topology-section">
-            <div class="section-header">
-              <h2>协作拓扑</h2>
-            </div>
-            <div id="memberChips" class="topology-canvas"></div>
-          </section>
+          <div class="inspector-content">
+            <section data-inspector-panel="progress">
+              <div id="activeTaskStatus" class="active-task-status">暂无当前任务</div>
+              <div class="inspector-block">
+                <div class="inspector-block-title">协作过程</div>
+                <div id="invocationTree" class="invocation-tree"></div>
+              </div>
+              <div class="inspector-block topology-section">
+                <div class="inspector-block-title">协作成员关系</div>
+                <div id="memberChips" class="topology-canvas"></div>
+              </div>
+              <button id="cancelTaskButton" type="button" class="stop-run-button">停止当前任务</button>
+            </section>
+
+            <section class="hidden" data-inspector-panel="files">
+              <div id="filesPanel" class="empty-panel">当前任务暂未报告文件变化</div>
+            </section>
+
+            <section class="hidden" data-inspector-panel="time">
+              <div id="timePanel" class="metric-panel"></div>
+            </section>
+
+            <section class="hidden" data-inspector-panel="history">
+              <div id="tasksList" class="task-list"></div>
+            </section>
+          </div>
         </aside>
       </main>
 
-      <section id="configView" class="config-view hidden">
-        <div class="config-top">
-          <div>
-            <h2>配置工作台</h2>
-            <p id="configStatus">配置 OpenClaw agent 文件与 TeamRoom 协作模板</p>
+      <input id="tokenInput" class="hidden" type="password" autocomplete="off" />
+      <button id="saveTokenButton" class="hidden" type="button">保存 Token</button>
+
+      <div id="setupModal" class="setup-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+        <section class="setup-modal">
+          <div class="setup-brand">
+            <span class="brand-mark">TR</span>
+            <div><strong>TeamRoom</strong><small>首次启动设置</small></div>
           </div>
-          <button id="closeConfigButton" type="button" class="secondary-button">返回协作室</button>
-        </div>
-
-        <div class="config-workbench">
-          <nav class="config-nav" aria-label="配置分类">
-            <button type="button" class="config-tab active" data-config-tab="agent-files">Agent 文件</button>
-            <button type="button" class="config-tab" data-config-tab="teamroom-policy">TeamRoom 协作</button>
-          </nav>
-
-          <section id="agentFilesPanel" class="config-panel">
-            <div class="config-panel-head">
+          <div class="setup-copy">
+            <strong id="setupTitle">连接你的智能助手运行服务</strong>
+            <p>选择本次 TeamRoom 使用的运行服务。</p>
+          </div>
+          <div class="backend-choices">
+            <label>
+              <input type="radio" name="setupBackend" value="opencode" checked />
+              <span><strong>OpenCode</strong><small>支持流式过程、原生提问、权限、中断和恢复</small></span>
+            </label>
+            <label>
+              <input type="radio" name="setupBackend" value="openclaw" />
+              <span><strong>OpenClaw</strong><small>通过 Gateway 接入现有 OpenClaw 协作环境</small></span>
+            </label>
+          </div>
+          <div class="setup-grid">
+            <label>
+              <span>如何连接</span>
+              <select id="setupLaunchMode">
+                <option value="managed">由 TeamRoom 启动本机服务</option>
+                <option value="external">连接已经运行的服务</option>
+              </select>
+            </label>
+            <label>
+              <span>服务地址</span>
+              <input id="setupBaseUrl" value="http://127.0.0.1:4096" />
+            </label>
+            <label id="setupWorkspaceField" class="setup-file-area">
+              <span>OpenCode 项目文件夹</span>
               <div>
-                <h3>OpenClaw Agent 文件</h3>
-                <p>查看并修改当前 OpenClaw agent 工作区中的 7 个 `.md` 文件。</p>
+                <input id="setupWorkspacePath" readonly placeholder="请选择包含 Agent 配置的项目文件夹" />
+                <button id="selectWorkspaceButton" class="secondary-button" type="button">选择文件夹</button>
               </div>
-              <button id="saveAgentFileButton" type="button">保存文件</button>
-            </div>
-            <div class="config-toolbar">
-              <label class="field-label">
-                <span>Agent</span>
-                <select id="configAgentSelect"></select>
-              </label>
-              <div id="agentFileWorkspace" class="path-note">未加载工作区</div>
-            </div>
-            <div id="agentFileTabs" class="file-tabs"></div>
-            <textarea id="agentFileEditor" class="config-editor" spellcheck="false" placeholder="选择 agent 和文件后加载内容"></textarea>
-          </section>
-
-          <section id="teamroomPolicyPanel" class="config-panel prompt-policy-panel hidden">
-            <div class="config-panel-head">
+              <small id="setupWorkspaceHint">TeamRoom 将在这个文件夹中启动 OpenCode。</small>
+            </label>
+            <label class="setup-file-area">
+              <span>文件区</span>
               <div>
-                <h3>TeamRoom 协作模板</h3>
-                <p>配置总控职责、上下文拼接方式、前序 agent 输出如何进入后续 prompt。</p>
+                <input id="setupFileAreaPath" readonly />
+                <button id="toggleFileAreaButton" class="secondary-button" type="button">切换默认文件区</button>
               </div>
-              <div class="config-actions">
-                <button id="resetCurrentPromptTemplateButton" type="button" class="secondary-button">恢复当前模板</button>
-                <button id="resetPolicyTemplatesButton" type="button" class="secondary-button">恢复默认模板</button>
-                <button id="savePolicyConfigButton" type="button">保存协作配置</button>
-              </div>
-            </div>
-            <div class="config-toolbar policy-hidden-settings">
-              <label class="field-label">
-                <span>协作室</span>
-                <select id="configRoomSelect"></select>
-              </label>
-              <label class="field-label">
-                <span>JSON 失败兜底派工</span>
-                <select id="configFallbackDispatchInput">
-                  <option value="none">不兜底派工</option>
-                  <option value="keyword">按关键词/标签匹配</option>
-                  <option value="all">全部 specialist 兜底</option>
-                </select>
-              </label>
-              <label class="check-row">
-                <input id="configRequireReviewInput" type="checkbox" />
-                <span>非 Supervisor 模式启用复核（Supervisor 固定总控终审）</span>
-              </label>
-            </div>
-            <div class="config-grid policy-hidden-settings">
-              <label class="field-label">
-                <span>历史任务注入数</span>
-                <input id="configRoomContextLimitInput" type="number" min="0" max="20" />
-              </label>
-              <label class="field-label">
-                <span>当前任务人工消息注入数</span>
-                <input id="configTaskMessageLimitInput" type="number" min="0" max="50" />
-              </label>
-            </div>
-            <div id="promptPlaceholders" class="placeholder-strip policy-hidden-settings"></div>
-            <div class="prompt-template-control">
-              <div class="prompt-template-intro">
-                <strong>Prompt 模板调优</strong>
-                <p>选择上方模板卡片后，下方会展开一个大编辑器。主模板决定派工、执行、终审；拼接子模板决定上下文如何传给下一个 Agent。</p>
-              </div>
-              <div id="promptTemplateSummary" class="prompt-template-summary"></div>
-              <div id="promptTemplateNav" class="prompt-template-nav"></div>
-            </div>
-            <div class="template-workspace">
-              <div class="template-grid">
-                <label class="field-label template-card" data-template-key="supervisorDispatch">
-                  <span>
-                    <b>Supervisor 派工 prompt 模板</b>
-                    <small>主模板 · 首次需求分析与任务拆解</small>
-                  </span>
-                  <textarea id="supervisorDispatchTemplateInput" class="template-editor" spellcheck="false"></textarea>
-                </label>
-                <label class="field-label template-card" data-template-key="specialistWork">
-                  <span>
-                    <b>Specialist 执行 prompt 模板</b>
-                    <small>主模板 · 专业子 Agent 执行</small>
-                  </span>
-                  <textarea id="specialistWorkTemplateInput" class="template-editor" spellcheck="false"></textarea>
-                </label>
-                <label class="field-label template-card" data-template-key="supervisorReview">
-                  <span>
-                    <b>Supervisor 复核 prompt 模板</b>
-                    <small>主模板 · 汇总审核与人工确认判定</small>
-                  </span>
-                  <textarea id="supervisorReviewTemplateInput" class="template-editor" spellcheck="false"></textarea>
-                </label>
-                <label class="field-label template-card compact-template-card" data-template-key="previousOutputItem">
-                  <span>
-                    <b>前序 agent 输出拼接模板</b>
-                    <small>拼接子模板 · agent 间上下文传递</small>
-                  </span>
-                  <textarea id="previousOutputItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-                </label>
-                <label class="field-label template-card compact-template-card" data-template-key="roomContextItem">
-                  <span>
-                    <b>协作室历史任务拼接模板</b>
-                    <small>拼接子模板 · 历史任务记忆</small>
-                  </span>
-                  <textarea id="roomContextItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-                </label>
-                <label class="field-label template-card compact-template-card" data-template-key="taskMessageItem">
-                  <span>
-                    <b>人工补充消息拼接模板</b>
-                    <small>拼接子模板 · 聊天干预与确认点回复</small>
-                  </span>
-                  <textarea id="taskMessageItemTemplateInput" class="small-template-editor" spellcheck="false"></textarea>
-                </label>
-              </div>
-              <aside id="promptVariableGuide" class="prompt-variable-guide" aria-label="Prompt 变量说明"></aside>
-            </div>
-          </section>
-        </div>
-      </section>
+              <small id="setupFileAreaHint">正在检测项目文件区</small>
+            </label>
+          </div>
+          <div id="setupTestResult" class="setup-result hidden"></div>
+          <div class="setup-actions">
+            <button id="closeSetupButton" class="secondary-button" type="button">稍后设置</button>
+            <button id="testSetupButton" class="secondary-button" type="button">测试连接</button>
+            <button id="saveSetupButton" type="button">保存并进入</button>
+          </div>
+        </section>
+      </div>
     </div>
-    <script type="module" src="/app.js?v=20260512-dev2-template-guide-1"></script>
+    <script type="module" src="/app.js?v=20260613-v2-direct-runtime-1"></script>
   </body>
 </html>
