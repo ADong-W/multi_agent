@@ -221,10 +221,37 @@ els.checkCurrentRunButton.addEventListener("click", async () => {
 });
 
 els.eventsFeed.addEventListener("click", (event) => {
+  const decisionOption = event.target.closest("[data-decision-option]");
+  if (decisionOption) {
+    selectDecisionOption(decisionOption);
+    return;
+  }
+
+  const decisionFill = event.target.closest("[data-decision-fill]");
+  if (decisionFill) {
+    const panel = decisionFill.closest("[data-decision-panel]");
+    fillDecisionPanelToChat(panel);
+    return;
+  }
+
+  const decisionSubmit = event.target.closest("[data-decision-submit]");
+  if (decisionSubmit) {
+    const panel = decisionSubmit.closest("[data-decision-panel]");
+    submitDecisionPanel(panel);
+    return;
+  }
+
   const reply = event.target.closest("[data-runtime-reply]");
   if (reply) {
     const panel = reply.closest("[data-runtime-approval]");
     submitRuntimeApproval(panel, reply.dataset.runtimeReply || "once");
+  }
+});
+
+els.eventsFeed.addEventListener("change", (event) => {
+  const runtimeOption = event.target.closest("[data-runtime-question-option]");
+  if (runtimeOption) {
+    updateRuntimeQuestionSelection(runtimeOption.closest("[data-runtime-question-index]"));
   }
 });
 
@@ -2957,7 +2984,7 @@ function renderRuntimeApprovalPanel(message) {
       <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="question">
         <div class="decision-panel-header"><div><span class="decision-kicker runtime-kicker">OpenCode 问题</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(statusText)}</small></div><time>${formatTime(message.time)}</time></div>
         <div class="decision-list runtime-question-list">
-          ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable, approval.response?.answers?.[index] || [])).join("")}
+          ${questions.map((question, index) => renderRuntimeQuestionItem(question, index, actionable, approval.response?.answers?.[index] || [], approval.id || message.id || "")).join("")}
         </div>
         ${actionable ? `<textarea class="runtime-approval-message" rows="2" placeholder="可选：补充说明"></textarea><div class="decision-actions"><button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button><button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">提交回答并继续</button></div>` : ""}
       </section>`;
@@ -2974,10 +3001,12 @@ function renderRuntimeApprovalPanel(message) {
     </section>`;
 }
 
-function renderRuntimeQuestionItem(question, index, actionable, answeredValues = []) {
+function renderRuntimeQuestionItem(question, index, actionable, answeredValues = [], groupId = "") {
   const options = Array.isArray(question.options) ? question.options : [];
   const inputType = question.multiple ? "checkbox" : "radio";
-  const answered = new Set((Array.isArray(answeredValues) ? answeredValues : [answeredValues]).map(String));
+  const answeredList = (Array.isArray(answeredValues) ? answeredValues : [answeredValues]).filter(Boolean);
+  const answered = new Set(answeredList.map(String));
+  const inputName = `runtime-question-${groupId || "approval"}-${index}`;
   return `
     <article class="decision-item runtime-question-item" data-runtime-question-index="${index}" data-runtime-multiple="${question.multiple ? "true" : "false"}">
       <div class="decision-number">${index + 1}</div>
@@ -2992,9 +3021,9 @@ function renderRuntimeQuestionItem(question, index, actionable, answeredValues =
             ? `<small>${escapeHtml(normalized.description)}</small>`
             : "";
           const checked = answered.has(String(normalized.label));
-          return `<label class="decision-option runtime-question-option ${checked ? "selected" : ""}"><input type="${inputType}" name="runtime-question-${index}" data-runtime-question-option="${index}" value="${escapeHtml(normalized.label)}" ${checked ? "checked" : ""} ${actionable ? "" : "disabled"} /><span class="runtime-option-letter">${escapeHtml(optionLabel(optionIndex))}</span><span class="runtime-option-copy"><strong>${escapeHtml(normalized.label)}</strong>${description}</span></label>`;
+          return `<label class="decision-option runtime-question-option ${checked ? "selected" : ""}"><input type="${inputType}" name="${escapeHtml(inputName)}" data-runtime-question-option="${index}" value="${escapeHtml(normalized.label)}" ${checked ? "checked" : ""} ${actionable ? "" : "disabled"} /><span class="runtime-option-letter">${escapeHtml(optionLabel(optionIndex))}</span><span class="runtime-option-copy"><strong>${escapeHtml(normalized.label)}</strong>${description}</span></label>`;
         }).join("")}</div>` : ""}
-        ${question.custom !== false && (actionable || !answeredValues.length) ? `<input class="decision-custom-input" data-runtime-question-custom="${index}" value="${escapeHtml(answeredValues.filter((item) => !options.some((option) => String((typeof option === "string" ? option : option.label) || "") === String(item))).join("；"))}" placeholder="${options.length ? "输入其他答案" : "请输入回答"}" ${actionable ? "" : "disabled"} />` : ""}
+        ${question.custom !== false && (actionable || !answeredList.length) ? `<input class="decision-custom-input" data-runtime-question-custom="${index}" value="${escapeHtml(answeredList.filter((item) => !options.some((option) => String((typeof option === "string" ? option : option.label) || "") === String(item))).join("；"))}" placeholder="${options.length ? "输入其他答案" : "请输入回答"}" ${actionable ? "" : "disabled"} />` : ""}
       </div>
     </article>`;
 }
@@ -3023,66 +3052,79 @@ function approvalStatusLabel(status) {
 }
 
 function bindPendingDecisionPanels() {
-  els.eventsFeed.querySelectorAll("[data-decision-panel]").forEach((panel) => {
-    panel.querySelectorAll("[data-decision-option]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const index = button.dataset.decisionOption;
-        panel.querySelectorAll(`[data-decision-option="${index}"]`).forEach((item) => {
-          item.classList.toggle("selected", item === button);
-        });
-        const input = panel.querySelector(`[data-decision-custom="${index}"]`);
-        if (input) {
-          input.value = button.dataset.optionValue || "";
-        }
-      });
-    });
-
-    panel.querySelector("[data-decision-fill]")?.addEventListener("click", () => {
-      const content = collectDecisionPanelContent(panel);
-      if (!content) {
-        setConnection("请至少选择或填写一个确认项");
-        return;
-      }
-      els.chatMessageInput.value = content;
-      els.chatMessageInput.focus();
-    });
-
-    panel.querySelector("[data-decision-submit]")?.addEventListener("click", async () => {
-      const content = collectDecisionPanelContent(panel);
-      if (!content) {
-        setConnection("请至少选择或填写一个确认项");
-        return;
-      }
-      const response = { answers: collectDecisionPanelAnswers(panel) };
-      const panelId = panel.dataset.decisionPanel || "";
-      panel.classList.add("submitting");
-      panel.querySelectorAll("button, input, textarea").forEach((item) => {
-        item.disabled = true;
-      });
-      await submitHumanContent(content, {
-        restoreOnError: () => {
-          panel.classList.remove("submitting");
-          panel.querySelectorAll("button, input, textarea").forEach((item) => {
-            item.disabled = false;
-          });
-        }
-      });
-      if (panelId) {
-        state.decisionResponses.set(panelId, response);
-      }
-      const task = activeTask();
-      if (task?.id) {
-        state.decisionResponses.set(task.id, response);
-      }
-    });
-  });
+  // Decision cards use delegated events on eventsFeed so redraws cannot detach handlers.
 }
 
 function bindRuntimeApprovalPanels() {
   // Runtime approval actions use the single delegated eventsFeed listener.
 }
 
+function selectDecisionOption(button) {
+  const panel = button?.closest("[data-decision-panel]");
+  if (!panel || button.disabled) {
+    return;
+  }
+  const index = button.dataset.decisionOption;
+  panel.querySelectorAll(`[data-decision-option="${index}"]`).forEach((item) => {
+    item.classList.toggle("selected", item === button);
+  });
+  const input = panel.querySelector(`[data-decision-custom="${index}"]`);
+  if (input) {
+    input.value = button.dataset.optionValue || "";
+  }
+}
+
+function fillDecisionPanelToChat(panel) {
+  if (!panel) {
+    return;
+  }
+  const content = collectDecisionPanelContent(panel);
+  if (!content) {
+    setConnection("请至少选择或填写一个确认项");
+    return;
+  }
+  els.chatMessageInput.value = content;
+  els.chatMessageInput.focus();
+}
+
+async function submitDecisionPanel(panel) {
+  if (!panel || panel.dataset.submitting === "true") {
+    return;
+  }
+  const content = collectDecisionPanelContent(panel);
+  if (!content) {
+    setConnection("请至少选择或填写一个确认项");
+    return;
+  }
+  const response = { answers: collectDecisionPanelAnswers(panel) };
+  const panelId = panel.dataset.decisionPanel || "";
+  panel.dataset.submitting = "true";
+  panel.classList.add("submitting");
+  panel.querySelectorAll("button, input, textarea").forEach((item) => {
+    item.disabled = true;
+  });
+  await submitHumanContent(content, {
+    restoreOnError: () => {
+      panel.dataset.submitting = "false";
+      panel.classList.remove("submitting");
+      panel.querySelectorAll("button, input, textarea").forEach((item) => {
+        item.disabled = false;
+      });
+    }
+  });
+  if (panelId) {
+    state.decisionResponses.set(panelId, response);
+  }
+  const task = activeTask();
+  if (task?.id) {
+    state.decisionResponses.set(task.id, response);
+  }
+}
+
 async function submitRuntimeApproval(panel, reply) {
+  if (!panel || panel.dataset.submitting === "true") {
+    return;
+  }
   const approvalId = panel.dataset.runtimeApproval;
   const taskId = panel.dataset.runtimeTask;
   if (!state.activeRoomId || !approvalId || !taskId) return;
@@ -3090,6 +3132,11 @@ async function submitRuntimeApproval(panel, reply) {
   const body = panel.dataset.runtimeType === "question"
     ? { reply, answers: collectRuntimeQuestionAnswers(panel), message }
     : { reply, message };
+  if (panel.dataset.runtimeType === "question" && !body.answers.some((answer) => answer.length)) {
+    setConnection("请至少选择或填写一个回答");
+    return;
+  }
+  panel.dataset.submitting = "true";
   panel.classList.add("submitting");
   panel.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = true; });
   try {
@@ -3097,9 +3144,20 @@ async function submitRuntimeApproval(panel, reply) {
     setTimeout(loadActiveRoom, 300);
   } catch (error) {
     setConnection(error.message);
+    panel.dataset.submitting = "false";
     panel.classList.remove("submitting");
     panel.querySelectorAll("button, input, textarea").forEach((item) => { item.disabled = false; });
   }
+}
+
+function updateRuntimeQuestionSelection(item) {
+  if (!item) {
+    return;
+  }
+  item.querySelectorAll(".runtime-question-option").forEach((label) => {
+    const input = label.querySelector("[data-runtime-question-option]");
+    label.classList.toggle("selected", Boolean(input?.checked));
+  });
 }
 
 function collectRuntimeQuestionAnswers(panel) {
