@@ -821,19 +821,106 @@ function enrichAgentWithProjectInfo(agent, projectInfo = {}) {
 }
 
 function normalizePermissionRequest(properties, agentId, sessionId) {
-  const permission = properties.permission || properties;
+  const rawPermission = properties.permission;
+  const permission = rawPermission && typeof rawPermission === "object"
+    ? rawPermission
+    : properties;
+  const command = firstPermissionText(permission, properties, [
+    "command",
+    "cmd",
+    "shell",
+    "script",
+    "args",
+    "arguments",
+    "input"
+  ]);
+  const toolName = firstPermissionText(permission, properties, [
+    "tool",
+    "toolName",
+    "tool_name",
+    "call",
+    "name"
+  ]);
+  const target = firstPermissionText(permission, properties, [
+    "path",
+    "file",
+    "target",
+    "resource",
+    "cwd",
+    "directory"
+  ]);
+  const patterns = normalizePermissionPatterns(permission);
+  const permissionType = stringifyPermissionValue(
+    typeof rawPermission === "string"
+      ? rawPermission
+      : permission.permission || permission.type || permission.action || ""
+  );
+  const summary = [
+    toolName ? `调用工具 ${toolName}` : "",
+    command ? "执行命令/操作" : "",
+    target ? `目标 ${target}` : "",
+    patterns.length ? `范围 ${patterns.join(", ")}` : ""
+  ].filter(Boolean).join("；");
   return {
     id: permission.id || properties.id || "",
     externalId: permission.id || properties.id || "",
     type: "permission",
     sessionId: permission.sessionID || properties.sessionID || sessionId,
     agentId,
-    title: `OpenCode 请求执行 ${permission.permission || permission.type || "受限操作"}`,
-    details: permission.pattern || permission.patterns?.join("\n") || "",
-    permission: permission.permission || permission.type || "",
-    patterns: permission.patterns || (permission.pattern ? [permission.pattern] : []),
+    title: `OpenCode 请求${permissionType ? ` ${permissionType}` : ""}权限`,
+    details: command || permission.pattern || patterns.join("\n") || "",
+    permission: permissionType,
+    action: permission.action || "",
+    tool: toolName,
+    toolName,
+    command,
+    target,
+    path: target,
+    resource: target,
+    summary,
+    description: firstPermissionText(permission, properties, ["description", "message", "reason", "title"]),
+    patterns,
     canAlwaysAllow: true
   };
+}
+
+function normalizePermissionPatterns(permission = {}) {
+  const raw = permission.patterns || permission.pattern || permission.paths || permission.files || [];
+  return (Array.isArray(raw) ? raw : [raw])
+    .map((item) => stringifyPermissionValue(item))
+    .filter(Boolean);
+}
+
+function firstPermissionText(primary = {}, secondary = {}, keys = []) {
+  for (const source of [primary, secondary]) {
+    for (const key of keys) {
+      const value = source?.[key];
+      const text = stringifyPermissionValue(value);
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
+function stringifyPermissionValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    return value.map(stringifyPermissionValue).filter(Boolean).join(" ");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, entry]) => {
+        const text = stringifyPermissionValue(entry);
+        return text ? `${key}: ${text}` : "";
+      })
+      .filter(Boolean)
+      .join(", ");
+  }
+  return String(value).trim();
 }
 
 function normalizeQuestionRequest(properties, agentId, sessionId) {

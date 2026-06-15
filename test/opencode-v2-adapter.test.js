@@ -497,6 +497,44 @@ test("OpenCode permission requests are answered once by original request id", as
   assert.equal(answered[0].request.id, "permission_1");
 });
 
+test("OpenCode permission requests preserve command and target context", async () => {
+  const requested = [];
+  const tracker = new OpenCodeRunTracker({
+    sessionId: "session_1",
+    agentId: "main-agent",
+    hooks: {
+      async onApprovalRequest(request) {
+        requested.push(request);
+        return { reply: "once" };
+      }
+    }
+  });
+  const event = {
+    type: "permission.asked",
+    properties: {
+      id: "permission_2",
+      sessionID: "session_1",
+      permission: "bash",
+      tool: "shell",
+      command: "npm test",
+      path: "/repo",
+      patterns: ["test/*.js"]
+    }
+  };
+
+  await tracker.accept(event, {
+    async answerPermission() {}
+  });
+
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].permission, "bash");
+  assert.equal(requested[0].toolName, "shell");
+  assert.equal(requested[0].command, "npm test");
+  assert.equal(requested[0].target, "/repo");
+  assert.deepEqual(requested[0].patterns, ["test/*.js"]);
+  assert.match(requested[0].summary, /shell/);
+});
+
 test("SSE parser accepts CRLF and ignores non-JSON heartbeat data", async () => {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({

@@ -528,6 +528,15 @@ export class DirectRunService {
       questions: Array.isArray(request.questions) ? request.questions : [],
       permission: request.permission || "",
       patterns: Array.isArray(request.patterns) ? request.patterns : [],
+      action: request.action || "",
+      tool: request.tool || "",
+      toolName: request.toolName || "",
+      command: request.command || "",
+      target: request.target || "",
+      path: request.path || "",
+      resource: request.resource || "",
+      summary: request.summary || "",
+      description: request.description || "",
       canAlwaysAllow: Boolean(request.canAlwaysAllow),
       createdAt: nowIso()
     };

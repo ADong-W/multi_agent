@@ -709,12 +709,32 @@ function compactDisplayEvents(events = []) {
     .filter((event) => event.type === "v2.run.output.completed")
     .map((event) => event.taskId || event.payload?.taskId || event.payload?.runId)
     .filter(Boolean));
+  const answeredRequestIds = new Set(events
+    .filter((event) => event.type === "v2.human_request.answered")
+    .map((event) => humanRequestEventId(event))
+    .filter(Boolean));
+  const latestCreatedByRequestId = new Map();
+  for (const event of events) {
+    if (event.type !== "v2.human_request.created") {
+      continue;
+    }
+    const requestId = humanRequestEventId(event);
+    if (requestId && !answeredRequestIds.has(requestId)) {
+      latestCreatedByRequestId.set(requestId, event.id);
+    }
+  }
   const streamByKey = new Map();
   const result = [];
   for (const event of events) {
     const taskId = event.taskId || event.payload?.taskId || event.payload?.runId;
     if (event.type === "v2.run.output.delta" && completedRunIds.has(taskId)) {
       continue;
+    }
+    if (event.type === "v2.human_request.created") {
+      const requestId = humanRequestEventId(event);
+      if (requestId && (answeredRequestIds.has(requestId) || latestCreatedByRequestId.get(requestId) !== event.id)) {
+        continue;
+      }
     }
     if (event.type === "v2.run.output.delta") {
       const key = `run:${taskId || ""}`;
@@ -729,6 +749,10 @@ function compactDisplayEvents(events = []) {
     result.push(event);
   }
   return result;
+}
+
+function humanRequestEventId(event = {}) {
+  return String(event.payload?.request?.id || event.payload?.requestId || "");
 }
 
 function appendLocalEvent(event) {
@@ -2390,6 +2414,15 @@ function eventToMessage(event) {
   if (event.type === "v2.human_request.created" || event.type === "v2.human_request.answered") {
     const request = payload.request || {};
     const taskId = event.taskId || payload.runId;
+    if (event.type === "v2.human_request.answered" && request.type === "permission") {
+      return {
+        id: event.id,
+        kind: "system process",
+        taskId,
+        time: event.timestamp,
+        body: `工具权限已处理：${permissionApprovalTitle(request)}`
+      };
+    }
     return {
       id: event.id,
       kind: "system runtime-approval",
@@ -2467,6 +2500,15 @@ function eventToMessage(event) {
   }
 
   if (event.type === "runtime.approval_resolved") {
+    if (payload.approval?.type === "permission") {
+      return {
+        id: event.id,
+        kind: "system process",
+        taskId: event.taskId || payload.taskId,
+        time: event.timestamp,
+        body: `工具权限已处理：${permissionApprovalTitle(payload.approval)}`
+      };
+    }
     return {
       id: event.id,
       kind: "system runtime-approval",
@@ -2990,15 +3032,44 @@ function renderRuntimeApprovalPanel(message) {
       </section>`;
   }
   const patterns = Array.isArray(approval.patterns) ? approval.patterns.filter(Boolean) : [];
+  const permission = describePermissionApproval(approval);
   return `
     <section class="runtime-approval-panel ${actionable ? "" : "resolved"}" data-runtime-approval="${escapeHtml(approval.id || "")}" data-runtime-task="${escapeHtml(message.taskId || approval.taskId || "")}" data-runtime-type="permission">
-      <div class="decision-panel-header"><div><span class="decision-kicker runtime-kicker">OpenCode 确认</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(statusText)}</small></div><time>${formatTime(message.time)}</time></div>
+      <div class="decision-panel-header"><div><span class="decision-kicker runtime-kicker">工具权限确认</span><strong>${escapeHtml(permission.title || title)}</strong><small>${escapeHtml(statusText)}</small></div><time>${formatTime(message.time)}</time></div>
       <div class="runtime-permission-body">
-        <div class="runtime-permission-meta"><span>Agent</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong><span>权限</span><strong>${escapeHtml(approval.permission || "tool")}</strong></div>
-        ${patterns.length ? `<pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre>` : `<p>${escapeHtml(approval.details || "OpenCode 请求执行一个受权限控制的动作。")}</p>`}
+        <div class="runtime-permission-meta"><span>申请方</span><strong>${escapeHtml(approval.agentId || "OpenCode")}</strong><span>权限类型</span><strong>${escapeHtml(permission.type)}</strong></div>
+        <p>${escapeHtml(permission.summary)}</p>
+        ${permission.command ? `<pre class="runtime-patterns"><code>${escapeHtml(permission.command)}</code></pre>` : ""}
+        ${patterns.length ? `<div class="runtime-permission-scope"><strong>影响范围</strong><pre class="runtime-patterns"><code>${escapeHtml(patterns.join("\n"))}</code></pre></div>` : ""}
         ${actionable ? `<textarea class="runtime-approval-message" rows="2" placeholder="可选：给 OpenCode 的说明"></textarea><div class="decision-actions"><button type="button" class="secondary runtime-approval-reply" data-runtime-reply="reject">拒绝</button>${approval.canAlwaysAllow ? `<button type="button" class="secondary runtime-approval-reply" data-runtime-reply="always">始终允许</button>` : ""}<button type="button" class="decision-submit-button runtime-approval-reply" data-runtime-reply="once">本次允许</button></div>` : ""}
       </div>
     </section>`;
+}
+
+function describePermissionApproval(approval = {}) {
+  const type = approval.permission || approval.action || approval.toolName || approval.tool || "受限操作";
+  const command = approval.command || approval.details || "";
+  const target = approval.target || approval.path || approval.resource || "";
+  const summary = approval.summary
+    || approval.description
+    || [
+      approval.toolName || approval.tool ? `调用工具 ${approval.toolName || approval.tool}` : "",
+      command ? "执行下面的命令或操作" : "",
+      target ? `目标：${target}` : "",
+      !command && !target ? "OpenCode 请求执行一个受权限控制的动作。" : ""
+    ].filter(Boolean).join("，");
+  return {
+    title: permissionApprovalTitle(approval),
+    type,
+    command,
+    summary
+  };
+}
+
+function permissionApprovalTitle(approval = {}) {
+  const type = approval.permission || approval.action || approval.toolName || approval.tool || "受限操作";
+  const target = approval.target || approval.path || approval.resource || "";
+  return target ? `${type}：${target}` : `请求 ${type} 权限`;
 }
 
 function renderRuntimeQuestionItem(question, index, actionable, answeredValues = [], groupId = "") {
